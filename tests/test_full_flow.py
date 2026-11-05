@@ -3,9 +3,9 @@
 按用户真实使用顺序：注册 -> 发布 -> 报名 -> 满员候补 -> 退出递补 -> 接受
 -> 超时顺延 -> 通知 -> 退出后重新报名 -> 组织者取消活动。
 """
-import json, sys, time, urllib.request, urllib.error
+import json, os, sys, time, urllib.request, urllib.error
 
-BASE = "http://127.0.0.1:8080/api"
+BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8080") + "/api"
 results = []
 def check(name, cond, detail=""):
     results.append(bool(cond)); print(("PASS" if cond else "FAIL"), "-", name, detail)

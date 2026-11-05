@@ -3,9 +3,9 @@
 只用 /demo/reset（演示接口，会恢复种子数据）做清理，不删库。
 每个检查打印 PASS（行为符合预期）或 FAIL（复现出问题），并打印原始响应/状态码。
 """
-import concurrent.futures, json, sys, urllib.request, urllib.error
+import concurrent.futures, json, os, sys, urllib.request, urllib.error
 
-BASE = "http://127.0.0.1:8080/api"
+BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8080") + "/api"
 results = []
 def check(name, cond, detail=""):
     results.append(bool(cond)); print(("PASS" if cond else "FAIL"), "-", name, str(detail)[:400])
@@ -123,13 +123,23 @@ org = login("organizer")
 # --- 6. 停用账号后旧 token 是否仍可操作 ---
 req("POST", "/register", body={"account": "auditdis", "password": "12345678", "nickname": "D"})
 tokD = login("auditdis", "12345678")
-# 通过 psql 把该账号置为 DISABLED（仅改测试账号，不动其他数据）
+# 把该账号置为 DISABLED（仅改测试账号，不动其他数据）。
+# 测试脚手架按 BASE_URL 端口选数据库客户端：8080 走 psql（PG），8081 走
+# mysql 客户端经 socket 以 root 连 MySQL（本机空密码，不写任何密码进文件）。
+# 断言本身（A10/A10b）不动。
 import subprocess, os
-env = dict(os.environ, LD_LIBRARY_PATH="/tmp/pgsql/usr/lib/x86_64-linux-gnu")
-subprocess.run(["/tmp/pgsql/usr/lib/postgresql/16/bin/psql", "-h", "/tmp/pgrun", "-p", "5433",
-                "-U", "postgres", "-d", "campus_buddy", "-c",
-                "UPDATE app_user SET status='DISABLED' WHERE account='auditdis';"],
-               env=env, capture_output=True)
+if "8081" in BASE:
+    subprocess.run([os.path.expanduser("~/workspace/.portable/mysql-8.0.28/bin/mysql"),
+                    "-S", os.path.expanduser("~/workspace/.portable/mysql-data/mysql.sock"),
+                    "-u", "root", "campus_buddy", "-e",
+                    "UPDATE app_user SET status='DISABLED' WHERE account='auditdis';"],
+                   capture_output=True)
+else:
+    env = dict(os.environ, LD_LIBRARY_PATH="/tmp/pgsql/usr/lib/x86_64-linux-gnu")
+    subprocess.run(["/tmp/pgsql/usr/lib/postgresql/16/bin/psql", "-h", "/tmp/pgrun", "-p", "5433",
+                    "-U", "postgres", "-d", "campus_buddy", "-c",
+                    "UPDATE app_user SET status='DISABLED' WHERE account='auditdis';"],
+                   env=env, capture_output=True)
 s, d = req("POST", "/activities", token=tokD, body={
     "title": "停用账号创建", "category": "其他", "description": "", "conditions": "", "location": "线上", "capacity": 2,
     "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"})

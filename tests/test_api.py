@@ -4,9 +4,9 @@
 20 并发报名上限 4 恰好 4 正式、同一账号并发多次只有一条记录。
 运行前：后端以 INVITE_TTL=10、SWEEP_SECONDS=2 启动；脚本开头调用 /demo/reset。
 """
-import concurrent.futures, json, sys, time, urllib.request
+import concurrent.futures, json, os, sys, time, urllib.request
 
-BASE = "http://127.0.0.1:8080/api"
+BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8080") + "/api"
 results = []
 def check(name, cond, detail=""):
     results.append((name, bool(cond), detail))

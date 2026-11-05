@@ -2,10 +2,10 @@
 Runs against http://127.0.0.1:8080. Saves screenshots to screenshots/mobile-*.
 Exit 0 only if every step passes; prints PASS/FAIL per step.
 """
-import sys, json, urllib.request
+import os, sys, json, urllib.request
 from playwright.sync_api import sync_playwright
 
-BASE = "http://127.0.0.1:8080"
+BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8080")
 OUT = "/home/hatch/workspace/campus-buddy/screenshots"
 results = []
 

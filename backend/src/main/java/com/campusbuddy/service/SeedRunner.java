@@ -2,8 +2,11 @@ package com.campusbuddy.service;
 
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
+import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Component;
 
+import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 
@@ -16,14 +19,28 @@ public class SeedRunner implements CommandLineRunner {
 
     private long createActivity(long org, String title, String cat, String loc, int cap, LocalDateTime now) {
         // 旧代码用 SELECT MAX(id) 取刚插入的活动，与 ApiController.create 是同一个并发错位问题；
-        // 启动时虽单线程，仍改用 RETURNING，避免任何并发插入时串位。
-        return jdbc.queryForObject(
-                "INSERT INTO activity(organizer_id, title, category, description, conditions, location, capacity, deadline, start_time, end_time) " +
-                "VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id",
-                Long.class,
-                org, title, cat, "演示活动", "请准时参加", loc, cap,
-                Timestamp.valueOf(now.plusDays(2)), Timestamp.valueOf(now.plusDays(3)),
-                Timestamp.valueOf(now.plusDays(3).plusHours(2)));
+        // 启动时虽单线程，仍改用可移植的列名数组取生成键，避免任何并发插入时串位。
+        // 必须用 new String[]{"id"} 而不是 Statement.RETURN_GENERATED_KEYS：
+        // PostgreSQL 驱动后者会把整行都当作生成键返回，getKey() 会因多键报错。
+        KeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbc.update(con -> {
+            PreparedStatement ps = con.prepareStatement(
+                    "INSERT INTO activity(organizer_id, title, category, description, conditions, location, capacity, deadline, start_time, end_time) " +
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    new String[]{"id"});
+            ps.setLong(1, org);
+            ps.setString(2, title);
+            ps.setString(3, cat);
+            ps.setString(4, "演示活动");
+            ps.setString(5, "请准时参加");
+            ps.setString(6, loc);
+            ps.setInt(7, cap);
+            ps.setTimestamp(8, Timestamp.valueOf(now.plusDays(2)));
+            ps.setTimestamp(9, Timestamp.valueOf(now.plusDays(3)));
+            ps.setTimestamp(10, Timestamp.valueOf(now.plusDays(3).plusHours(2)));
+            return ps;
+        }, keyHolder);
+        return keyHolder.getKey().longValue();
     }
 
     /** 按账号查 id，不再假设 demo01=2、demo02=3……。

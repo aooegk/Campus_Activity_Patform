@@ -6,9 +6,12 @@ import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
+import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
+import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.*;
@@ -19,9 +22,21 @@ public class ApiController {
     private final JdbcTemplate jdbc;
     private final AuthService auth;
     private final BuddyService buddy;
+    /** 启动时从 DataSource 取数据库产品名判断一次并缓存：与 BuddyService 同一做法，
+     *  仅用于 /demo/reset 的自增序列重置分支。 */
+    private final boolean mysql;
 
     public ApiController(JdbcTemplate jdbc, AuthService auth, BuddyService buddy) {
         this.jdbc = jdbc; this.auth = auth; this.buddy = buddy;
+        this.mysql = detectMysql(jdbc);
+    }
+
+    private static boolean detectMysql(JdbcTemplate jdbc) {
+        try (var con = jdbc.getDataSource().getConnection()) {
+            return con.getMetaData().getDatabaseProductName().toLowerCase().contains("mysql");
+        } catch (Exception e) {
+            throw new IllegalStateException("无法识别数据库产品", e);
+        }
     }
 
     private Long require(String authHeader) {
@@ -86,7 +101,13 @@ public class ApiController {
             Throwable t = e;
             while (t != null) {
                 String m = t.getMessage();
-                if (m != null && m.contains("duplicate key")) throw new IllegalStateException("账号已存在");
+                // PostgreSQL 唯一冲突文案是 "duplicate key"，MySQL 是 "Duplicate entry ..."，
+                // 统一按小写匹配，两库重复注册都报“账号已存在”。
+                if (m != null) {
+                    String lower = m.toLowerCase();
+                    if (lower.contains("duplicate key") || lower.contains("duplicate entry"))
+                        throw new IllegalStateException("账号已存在");
+                }
                 t = t.getCause();
             }
             throw new IllegalStateException("注册失败，请重试");
@@ -163,7 +184,8 @@ public class ApiController {
         long me = require(h);
         // 旧代码对空标题、缺地点、非法类别、缺容量一律不校验，
         // 走到数据库约束或空指针时直接返回 500；且用 SELECT MAX(id) 取新活动 id，
-        // 并发创建时多个请求会拿到同一个（别人的）id。全部在此处校验 + RETURNING 取 id。
+        // 并发创建时多个请求会拿到同一个（别人的）id。全部在此处校验 + 用
+        // 可移植的 RETURN_GENERATED_KEYS 取新活动 id（PostgreSQL 与 MySQL 驱动都支持）。
         String title = body.get("title") instanceof String ? (String) body.get("title") : null;
         if (title == null || title.isBlank() || title.codePointCount(0, title.length()) > 50)
             throw new IllegalStateException("标题需为 1-50 字");
@@ -197,12 +219,30 @@ public class ApiController {
         }
         if (!(LocalDateTime.now().isBefore(deadline) && !deadline.isAfter(start) && start.isBefore(end)))
             throw new IllegalStateException("时间需满足：现在 < 报名截止 ≤ 开始 < 结束");
-        Long id = jdbc.queryForObject(
-                "INSERT INTO activity(organizer_id, title, category, description, conditions, location, capacity, deadline, start_time, end_time) " +
-                "VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id",
-                Long.class,
-                me, title, category, description, conditions, location, capacity,
-                Timestamp.valueOf(deadline), Timestamp.valueOf(start), Timestamp.valueOf(end));
+        // lambda 内只能捕获 final / effectively-final 变量，先复制一份。
+        // 取新活动 id 必须用列名数组 new String[]{"id"} 而不是 Statement.RETURN_GENERATED_KEYS：
+        // PostgreSQL 驱动后者会把整行都当作生成键返回，getKey() 会因多键报错。
+        final int capFinal = capacity;
+        final LocalDateTime deadlineFinal = deadline, startFinal = start, endFinal = end;
+        KeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbc.update(con -> {
+            PreparedStatement ps = con.prepareStatement(
+                    "INSERT INTO activity(organizer_id, title, category, description, conditions, location, capacity, deadline, start_time, end_time) " +
+                    "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                    new String[]{"id"});
+            ps.setLong(1, me);
+            ps.setString(2, title);
+            ps.setString(3, category);
+            ps.setString(4, description);
+            ps.setString(5, conditions);
+            ps.setString(6, location);
+            ps.setInt(7, capFinal);
+            ps.setTimestamp(8, Timestamp.valueOf(deadlineFinal));
+            ps.setTimestamp(9, Timestamp.valueOf(startFinal));
+            ps.setTimestamp(10, Timestamp.valueOf(endFinal));
+            return ps;
+        }, keyHolder);
+        Long id = keyHolder.getKey().longValue();
         return Map.of("ok", true, "id", id);
     }
 
@@ -309,11 +349,21 @@ public class ApiController {
         jdbc.update("DELETE FROM activity");
         jdbc.update("DELETE FROM app_user");
         // 重置自增序列，避免演示时编号无限增长
-        jdbc.execute("ALTER SEQUENCE app_user_id_seq RESTART WITH 1");
-        jdbc.execute("ALTER SEQUENCE activity_id_seq RESTART WITH 1");
-        jdbc.execute("ALTER SEQUENCE participation_id_seq RESTART WITH 1");
-        jdbc.execute("ALTER SEQUENCE invitation_id_seq RESTART WITH 1");
-        jdbc.execute("ALTER SEQUENCE notification_id_seq RESTART WITH 1");
+        // MySQL 没有 SEQUENCE：表已清空，AUTO_INCREMENT = 1 即从 1 开始；
+        // PostgreSQL 保持原 ALTER SEQUENCE。
+        if (mysql) {
+            jdbc.execute("ALTER TABLE app_user AUTO_INCREMENT = 1");
+            jdbc.execute("ALTER TABLE activity AUTO_INCREMENT = 1");
+            jdbc.execute("ALTER TABLE participation AUTO_INCREMENT = 1");
+            jdbc.execute("ALTER TABLE invitation AUTO_INCREMENT = 1");
+            jdbc.execute("ALTER TABLE notification AUTO_INCREMENT = 1");
+        } else {
+            jdbc.execute("ALTER SEQUENCE app_user_id_seq RESTART WITH 1");
+            jdbc.execute("ALTER SEQUENCE activity_id_seq RESTART WITH 1");
+            jdbc.execute("ALTER SEQUENCE participation_id_seq RESTART WITH 1");
+            jdbc.execute("ALTER SEQUENCE invitation_id_seq RESTART WITH 1");
+            jdbc.execute("ALTER SEQUENCE notification_id_seq RESTART WITH 1");
+        }
         // 种子逻辑与 SeedRunner 相同，这里直接复用其 run()（空库时写入）
         new com.campusbuddy.service.SeedRunner(jdbc).run();
         auth.clearSessions();

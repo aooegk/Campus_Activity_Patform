@@ -20,21 +20,47 @@ import java.util.*;
 public class BuddyService {
     private final JdbcTemplate jdbc;
     private final int inviteTtlSeconds;
+    /** 启动时从 DataSource 取数据库产品名判断一次并缓存：MySQL 用 INSERT IGNORE，
+     *  PostgreSQL 保持 ON CONFLICT DO NOTHING。两分支语义相同：event_key 冲突时静默跳过。 */
+    private final boolean mysql;
 
     public BuddyService(JdbcTemplate jdbc, @Value("${app.invite-ttl-seconds:120}") int inviteTtlSeconds) {
         this.jdbc = jdbc;
         this.inviteTtlSeconds = inviteTtlSeconds;
+        this.mysql = detectMysql(jdbc);
+    }
+
+    private static boolean detectMysql(JdbcTemplate jdbc) {
+        try (var con = jdbc.getDataSource().getConnection()) {
+            return con.getMetaData().getDatabaseProductName().toLowerCase().contains("mysql");
+        } catch (Exception e) {
+            throw new IllegalStateException("无法识别数据库产品", e);
+        }
     }
 
     public int inviteTtlSeconds() { return inviteTtlSeconds; }
 
     private static Timestamp ts(LocalDateTime t) { return Timestamp.valueOf(t); }
 
+    /** 数据库时间列转 LocalDateTime：MySQL 驱动把 DATETIME/TIMESTAMP 列返回为
+     *  LocalDateTime，PostgreSQL 驱动返回为 Timestamp；两者都归一化，避免
+     *  (Timestamp) 强转在 MySQL 上抛 ClassCastException。
+     *  同时统一 toString() 的输出格式（ISO），两库返回的 JSON 时间格式一致。 */
+    private static LocalDateTime asLocalDateTime(Object v) {
+        if (v instanceof LocalDateTime ldt) return ldt;
+        if (v instanceof Timestamp t) return t.toLocalDateTime();
+        if (v instanceof java.util.Date d) return new Timestamp(d.getTime()).toLocalDateTime();
+        throw new IllegalStateException("无法识别的时间类型: " + v);
+    }
+
     private void notify(Long userId, Long activityId, Long invitationId,
                         String type, String content, String eventKey) {
-        jdbc.update("INSERT INTO notification(user_id, activity_id, invitation_id, type, content, event_key) " +
-                        "VALUES (?,?,?,?,?,?) ON CONFLICT (user_id, event_key) DO NOTHING",
-                userId, activityId, invitationId, type, content, eventKey);
+        String sql = mysql
+                ? "INSERT IGNORE INTO notification(user_id, activity_id, invitation_id, type, content, event_key) " +
+                        "VALUES (?,?,?,?,?,?)"
+                : "INSERT INTO notification(user_id, activity_id, invitation_id, type, content, event_key) " +
+                        "VALUES (?,?,?,?,?,?) ON CONFLICT (user_id, event_key) DO NOTHING";
+        jdbc.update(sql, userId, activityId, invitationId, type, content, eventKey);
     }
 
     private int formalCount(long activityId) {
@@ -62,7 +88,7 @@ public class BuddyService {
             // 先锁活动行：退出/报名/超时三条路都在同一把锁下核算容量，避免超时顺延与报名并发超员
             var act = jdbc.queryForMap("SELECT capacity, deadline, status FROM activity WHERE id=? FOR UPDATE", activityId);
             if (!"OPEN".equals(act.get("status"))) return;
-            LocalDateTime deadline = ((Timestamp) act.get("deadline")).toLocalDateTime();
+            LocalDateTime deadline = asLocalDateTime(act.get("deadline"));
             if (!now.isBefore(deadline)) return;
             int vacancy = ((Number) act.get("capacity")).intValue()
                     - formalCount(activityId) - reservedCount(activityId, now);
@@ -96,7 +122,7 @@ public class BuddyService {
         var act = jdbc.queryForMap("SELECT * FROM activity WHERE id=? FOR UPDATE", activityId);
         if (!"OPEN".equals(act.get("status")))
             throw new IllegalStateException("活动不在报名期");
-        if (!now.isBefore(((Timestamp) act.get("deadline")).toLocalDateTime()))
+        if (!now.isBefore(asLocalDateTime(act.get("deadline"))))
             throw new IllegalStateException("已过报名截止时间");
         var existing = jdbc.queryForList(
                 "SELECT * FROM participation WHERE activity_id=? AND user_id=?", activityId, userId);
@@ -187,7 +213,7 @@ public class BuddyService {
         if (!"PENDING".equals(inv.get("status"))) {
             return Map.of("invitation_status", inv.get("status"), "note", "该邀请已被处理，返回当前结果");
         }
-        LocalDateTime expires = ((Timestamp) inv.get("expires_at")).toLocalDateTime();
+        LocalDateTime expires = asLocalDateTime(inv.get("expires_at"));
         if (!now.isBefore(expires) && !now.isEqual(expires)) {
             // 确认接口先于扫描任务到达时，也必须按实际过期时刻拒绝（SRS 3.3.6.5）
             jdbc.update("UPDATE invitation SET status='EXPIRED' WHERE id=?", invitationId);
@@ -262,13 +288,13 @@ public class BuddyService {
             var m = mine.get(0);
             out.put("my_status", m.get("status"));
             out.put("participation_id", m.get("id"));
-            out.put("my_queued_at", m.get("queued_at") == null ? null : m.get("queued_at").toString());
+            out.put("my_queued_at", m.get("queued_at") == null ? null : asLocalDateTime(m.get("queued_at")).toString());
             var inv = jdbc.queryForList(
                     "SELECT * FROM invitation WHERE participation_id=? AND status='PENDING' ORDER BY id DESC LIMIT 1",
                     m.get("id"));
             if (!inv.isEmpty()) {
                 out.put("invitation_id", inv.get(0).get("id"));
-                out.put("invitation_expires_at", inv.get(0).get("expires_at").toString());
+                out.put("invitation_expires_at", asLocalDateTime(inv.get(0).get("expires_at")).toString());
             }
             // 候补排名：排队中按 queued_at, id 排序
             if ("WAITING".equals(m.get("status"))) {
