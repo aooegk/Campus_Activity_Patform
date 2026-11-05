@@ -1,0 +1,11 @@
+<!-- 国内可直连的 Maven 镜像（阿里云），构建时用 -s settings-aliyun.xml -->
+<settings>
+    <mirrors>
+        <mirror>
+            <id>aliyun-public</id>
+            <mirrorOf>central</mirrorOf>
+            <name>Aliyun Maven</name>
+            <url>https://maven.aliyun.com/repository/public</url>
+        </mirror>
+    </mirrors>
+</settings>

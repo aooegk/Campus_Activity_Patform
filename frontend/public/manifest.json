@@ -1,0 +1,14 @@
+{
+  "name": "找个搭子 · 校园活动组队与候补平台",
+  "short_name": "找个搭子",
+  "description": "校园活动组队、满员候补、退出递补与限时确认平台",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#FAF9F5",
+  "theme_color": "#D97757",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

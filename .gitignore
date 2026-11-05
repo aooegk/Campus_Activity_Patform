@@ -1,0 +1,33 @@
+# 依赖与构建产物
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/android/.gradle/
+frontend/android/build/
+frontend/android/app/build/
+frontend/ios/App/build/
+backend/target/
+backend/src/main/resources/static/
+*.log
+
+# 打包与演示产物（二进制、大文件，不进仓库）
+*.zip
+*.pptx
+CampusBuddy-网页展示.html
+CampusBuddy-网页展示-含截图版.html
+windows-package/
+screenshots/
+assets/
+ppt-work/
+ppt17-work/
+ppt18-work/
+
+# 本地环境
+.portable/
+*.muse-github-snapshot-sync.json
+
+# 二进制文件（连接器推送只支持 UTF-8 文本，此两类不进仓库）
+__pycache__/
+*.jar
+# 注意：frontend/android/gradle/wrapper/gradle-wrapper.jar 因此未进仓库；
+# 本地编 APK 前需在有 Gradle 的机器上跑一次 gradle wrapper 重新生成。

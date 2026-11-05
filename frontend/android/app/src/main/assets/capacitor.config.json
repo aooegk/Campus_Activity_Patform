@@ -1,0 +1,8 @@
+{
+	"appId": "com.campusbuddy.app",
+	"appName": "找个搭子",
+	"webDir": "dist",
+	"server": {
+		"cleartext": true
+	}
+}

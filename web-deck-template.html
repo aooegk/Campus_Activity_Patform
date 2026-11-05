@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>找个搭子 · 数据库课程设计第一次汇报（网页版）</title>
+<style>
+  :root { --cream: #FAF9F5; --ink: #141413; --orange: #D97757; --grey: #5E5D59; --line: #E8E6DC; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #E8E6DC; color: var(--ink); font-family: "Noto Serif SC", "Noto Serif CJK SC", "Songti SC", "STSong", serif; }
+  .deck { max-width: 1100px; margin: 0 auto; padding: 24px 16px 90px; }
+  .slide { display: none; background: var(--cream); border: 1px solid var(--line); border-radius: 20px;
+    min-height: 620px; padding: 48px 56px; background-size: cover; background-position: center; }
+  .slide.active { display: block; }
+  .slide.content { background-image: url(__BG_CONTENT__); }
+  .slide.cover { background-image: url(__BG_COVER__); }
+  .slide.demo { background-image: url(__BG_DEMO__); }
+  .kicker { color: var(--orange); font-weight: bold; letter-spacing: 1px; }
+  h1 { font-family: "STXingkai", "Noto Serif SC", "Songti SC", serif; font-size: 64px; margin: 16px 0 8px; }
+  h2 { font-family: Georgia, "Noto Serif SC", "Songti SC", serif; font-size: 38px; margin: 8px 0; }
+  .sub { color: var(--grey); font-size: 17px; }
+  .num { color: var(--orange); font-weight: bold; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 28px; }
+  .grid.two { grid-template-columns: repeat(2, 1fr); }
+  .grid.five { grid-template-columns: repeat(5, 1fr); }
+  .card { background: #fff; border: 1px solid var(--line); border-top: 4px solid var(--orange); border-radius: 14px; padding: 18px; }
+  .card h3 { margin: 0 0 10px; font-size: 19px; }
+  .card p { margin: 6px 0; line-height: 1.7; }
+  ul { line-height: 2; font-size: 19px; }
+  .takeaway { font-size: 21px; font-weight: bold; margin-top: 28px; }
+  .foot { color: var(--grey); font-size: 13px; margin-top: 36px; }
+  .controls { position: fixed; left: 0; right: 0; bottom: 0; background: rgba(250,249,245,.95); border-top: 1px solid var(--line);
+    display: flex; gap: 10px; align-items: center; justify-content: center; padding: 12px; }
+  .controls button { background: var(--orange); color: #fff; border: 0; padding: 10px 18px; border-radius: 999px; cursor: pointer; font-size: 15px; }
+  .controls button.ghost { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+  .notes { display: none; background: #fff; border: 1px dashed var(--orange); border-radius: 12px; padding: 14px 18px; margin-top: 20px; }
+  body.show-notes .notes { display: block; }
+  @media (max-width: 700px) { .slide { padding: 28px 22px; min-height: auto; } .grid, .grid.two, .grid.five { grid-template-columns: 1fr; } h1 { font-size: 44px; } h2 { font-size: 28px; } .controls { flex-wrap: wrap; gap: 8px; padding: 10px 8px; } .controls button { padding: 8px 14px; font-size: 14px; } .slide img { max-height: none !important; } }
+</style>
+</head>
+<body>
+<div class="deck">
+  <section class="slide cover active">
+    <p class="kicker">数据库课程设计 · 第一次汇报</p>
+    <h1>找个搭子</h1>
+    <h2 style="font-size:30px">校园活动组队与候补平台</h2>
+    <p class="sub">满员不是结束，候补也要排得明明白白</p>
+    <p style="margin-top:60px">13 小组 · 陈子逸　张梓轩　吉浩铭　唐裕翔</p>
+    <p class="sub">汇报约 7 分钟：背景、数据库设计、技术路线、已跑通的原型</p>
+    <div class="notes">约30秒：大家好，我们是13小组，选题是找个搭子，校园活动组队与候补平台。今天汇报四件事：为什么做这个题，数据库设计是重点，技术路线，以及已经跑通的原型长什么样。</div>
+  </section>
+
+  <section class="slide content">
+    <p><span class="num">02</span>　找个搭子</p>
+    <h2>选题从哪来</h2><p class="sub">对照选题参考，不是凭空想的题目</p>
+    <ul>
+      <li><b>参考题目：</b>社团活动管理与报名系统</li>
+      <li><b>我们的落点：</b>校园活动组队平台“找个搭子”</li>
+      <li><b>已有基础：</b>小组需求文档，11 个模块、41 项功能</li>
+      <li><b>本次聚焦 P0：</b>发布、报名、满员候补、退出递补</li>
+    </ul>
+    <div class="card"><h3>一句话定位</h3><p>不是再做一个活动列表。重点是满员之后怎么办：谁排队、谁先补、多久不确认就顺延。这正是数据库要管的事。</p></div>
+    <div class="notes">约30秒：选题来自参考题目里的社团活动管理与报名系统，我们把它落到找个搭子这个已有需求文档的项目上。第一次汇报先聚焦核心流程，通知作为递补流程的一部分一并展示，P2管理后台、评价往后放。</div>
+  </section>
+
+  <section class="slide content">
+    <p><span class="num">03</span>　找个搭子</p>
+    <h2>痛点 → 目标</h2><p class="sub">找不到搭子，满员就只能放弃</p>
+    <div class="grid">
+      <div class="card"><h3>痛点 1 · 找不到人</h3><p>想打球、想自习、想拼桌游，身边人不一定有空，活动常常凑不齐人而取消。</p></div>
+      <div class="card"><h3>痛点 2 · 满员就乱</h3><p>名额满了只能在群里问，谁先来、谁替补全凭口头，退出一个名额也补不及时。</p></div>
+      <div class="card"><h3>目标</h3><p>发布活动 → 报名 → 满员自动候补 → 有人退出自动递补 → 限时确认，超时顺延。</p></div>
+    </div>
+    <p class="takeaway">衡量标准：人数不能算错，排队不能插队，邀请不能一女二嫁。</p>
+    <div class="notes">约30秒：痛点有两个，找不到人和满员混乱。我们的目标是一条完整链路：发布、报名、候补、递补、限时确认。最后那句就是验收标准，人数、排队、邀请三样都不能错。</div>
+  </section>
+
+  <section class="slide content">
+    <p><span class="num">04</span>　找个搭子</p>
+    <h2>这为什么是数据库课设</h2><p class="sub">页面不难，难的是并发下的数据一致</p>
+    <div class="grid two">
+      <div class="card"><h3>有效占用 ≤ 上限</h3><p>有效占用 = 正式人数 + 未过期待确认邀请数，两者之和永远不能超过上限，这条不变量由事务保证，不是事后统计。</p></div>
+      <div class="card"><h3>防重复 · 防超员</h3><p>同一活动同一用户只有一条当前参与记录，唯一约束是最后一道防线；多人同时报名也不能冲破上限。</p></div>
+      <div class="card"><h3>邀请只能有一种终态</h3><p>接受、拒绝、超时、失效互相竞争，条件更新 WHERE status='PENDING' 只让先到者改状态，后到者影响 0 行，只能读回当前终态。</p></div>
+      <div class="card"><h3>候补排序要稳定</h3><p>按入队时间排，时间相同按记录编号排，即 ORDER BY queued_at, id；退出重进要重新排队，不保留原排名。</p></div>
+    </div>
+    <div class="notes">约35秒：这是我们选题最像数据库课设的地方。四个规则都不能只靠前端按钮挡。报名先在一个事务里用 SELECT … FOR UPDATE 锁住活动行，再算正式加预留，算完才写参与记录，并发报名排队进事务，锁一放、后来的重算一遍，所以冲不破上限。邀请接受和超时扫描抢同一条记录时，条件更新只让先到的改状态。后面讲表怎么设计来保证这四条。</div>
+  </section>
+
+  <section class="slide content">
+    <p><span class="num">05</span>　找个搭子</p>
+    <h2>数据模型：6 张表</h2><p class="sub">对应需求文档第 4 章，关系和约束先定死</p>
+    <div class="grid">
+      <div class="card"><h3>app_user 用户</h3><p>id / account 唯一<br>nickname / role / status</p></div>
+      <div class="card"><h3>activity 活动</h3><p>organizer_id → user<br>capacity / deadline / start / end</p></div>
+      <div class="card"><h3>participation 参与</h3><p>activity_id + user_id 唯一<br>FORMAL / WAITING / INVITED</p></div>
+      <div class="card"><h3>invitation 邀请</h3><p>participation_id → 参与<br>PENDING / ACCEPTED / 超时等<br>(status, expires_at) 组合索引</p></div>
+      <div class="card"><h3>notification 通知</h3><p>user_id + event_key 唯一<br>type / content / read_at</p></div>
+      <div class="card"><h3>feedback 评价 P2</h3><p>participation_id 唯一<br>score 1–5 / content ≤ 500 字</p></div>
+    </div>
+    <p class="foot">关系：用户 1–N 活动；用户 N–M 活动（经参与记录）；参与 1–N 邀请历史，但同时只能有一个待确认邀请。</p>
+    <div class="notes">约35秒：六张表，用户、活动、参与记录、邀请、通知、评价。约束分三层：外键保证引用完整，CHECK 约束卡住容量、时间顺序和评分范围，唯一约束防重复写入。索引也有分工：邀请表上对状态加过期时间建组合索引，超时扫描按状态和过期时间走索引而不是全表扫；通知按用户加事件键唯一，同一事件只发一条。下一页是从库里反向生成的 ER 图，线和基数可以对照着看。</div>
+  </section>
+
+  <section class="slide content">
+    <p><span class="num">06</span>　找个搭子</p>
+    <h2>数据模型：ER 图</h2><p class="sub">从正在运行的 PostgreSQL 数据库反向生成，6 张表、外键与基数一一对应</p>
+    <img src="__ERD__" style="width:100%; object-fit:contain; border:1px solid var(--line); border-radius:14px; background:#FAF9F5">
+    <p>读法：下划线是主键，*_id 是外键；线上的 1 / 0..N / {0,1} 是基数。</p>
+    <p>1 个用户可组织 0..N 个活动；1 个活动对应 0..N 条参与记录；1 条参与记录对应 0..N 条邀请历史；评价与参与记录 1 对 1。</p>
+    <div class="notes">约40秒：这张 ER 图不是手画的，是用 ERAlchemy 连上正在运行的 PostgreSQL 反向生成的。重点看三条线：用户到活动是一对多，活动到参与记录是一对多，参与记录到邀请是一对多，评价到参与记录是一对一，因为评价表上参与记录编号唯一。</div>
+  </section>
+
+  <section class="slide content">
+    <p><span class="num">07</span>　找个搭子</p>
+    <h2>技术路线</h2><p class="sub">主流方案，Windows 上能直接演示</p>
+    <div class="grid">
+      <div class="card"><h3>Vue 3 前端</h3><p>活动大厅 / 我的活动 / 通知</p></div>
+      <div class="card"><h3>Spring Boot 3 后端</h3><p>REST 接口 + 事务 + 定时任务</p></div>
+      <div class="card"><h3>PostgreSQL</h3><p>事务 / 行锁 / 唯一约束<br>条件更新 / 组合索引</p></div>
+    </div>
+    <ul>
+      <li><b>国内可直连：</b>Maven 走阿里云镜像，npm 走 npmmirror；前端打包进后端，不依赖国外 CDN。</li>
+      <li><b>Windows 演示：</b>装好 JDK 17 和 PostgreSQL 后，双击 run.bat 启动，浏览器打开就能操作。</li>
+      <li><b>数据库用法：</b>报名、递补、超时三条写路径都落在事务里：读数先锁行，写数用条件更新，扫描只处理到期的 PENDING 邀请。</li>
+      <li><b>配置分离：</b>端口、数据库连接、确认窗口、扫描周期都放配置文件，不写死路径和密码。</li>
+    </ul>
+    <div class="notes">约35秒：路线是 Vue 3 加 Spring Boot 3 加 PostgreSQL，都是主流方案。数据库这边重点讲用法：PostgreSQL 不只是存数据，容量不变量靠事务加行锁保证，邀请终态靠条件更新保证，超时靠组合索引加定时扫描保证。补充两点：一是依赖源全部换成国内可直连的镜像，二是演示版把前端打包进后端，Windows 上只要有 JDK 17 和 PostgreSQL 就能跑。</div>
+  </section>
+
+  <section class="slide content">
+    <p><span class="num">08</span>　找个搭子</p>
+    <h2>演示剧本：一个 4 人活动</h2><p class="sub">第二次汇报就按这条线现场演示</p>
+    <div class="grid five">
+      <div class="card"><h3>1 发布</h3><p>羽毛球，上限 4 人</p></div>
+      <div class="card"><h3>2 报满</h3><p>4 人正式，第 5 人候补第 1</p></div>
+      <div class="card"><h3>3 退出</h3><p>1 名正式退出，空出名额</p></div>
+      <div class="card"><h3>4 递补</h3><p>给候补第 1 发限时邀请</p></div>
+      <div class="card"><h3>5 确认</h3><p>接受 → 转正式；超时 → 顺延</p></div>
+    </div>
+    <p class="takeaway">演示时重点看两组数：正式人数 + 预留邀请数永远 ≤ 上限，候补按排名依次递补。</p>
+    <div class="notes">约30秒：演示剧本用一个上限四人的羽毛球活动走完整流程，重点不是页面好不好看，而是正式加预留不超过上限、候补排名依次递补这两个关系在每一步都对得上，超时顺延那一步也会现场等它发生。</div>
+  </section>
+
+  <section class="slide content">
+    <p><span class="num">09</span>　找个搭子</p>
+    <h2>验收标准：先说好怎么算通过</h2><p class="sub">来自需求文档第 5 章，不是临场发挥</p>
+    <ul>
+      <li><b>20 人同时报名，上限 4 人：</b>最终恰好 4 名正式，其余为候补，行锁串行化加唯一约束兜底。</li>
+      <li><b>同一账号并发提交多次：</b>只产生一条有效参与记录。</li>
+      <li><b>确认与超时同时到达：</b>同一邀请只出现一种终态，条件更新抢占，不重复分配名额。</li>
+      <li><b>超时后：</b>原邀请失效并顺延，过期确认接口直接拒绝，不等扫描任务。</li>
+      <li><b>重启后：</b>已提交的参与记录不丢失，定时任务补扫未处理邀请。</li>
+    </ul>
+    <div class="notes">约30秒：验收标准提前定好，写进需求文档第五章。这些不是只跑一遍演示，而是数据库层面的保证：行锁加唯一约束挡并发超员，条件更新挡终态竞争，超时扫描加过期判定挡顺延遗漏，重启后已提交记录不丢、扫描补处理。五条按标准逐项通过，才算核心流程跑通。</div>
+  </section>
+
+  <section class="slide content">
+    <p><span class="num">10</span>　找个搭子</p>
+    <h2>进展与下一步</h2><p class="sub">已完成与下一步</p>
+    <ul>
+      <li><b>已完成 1：</b>建表 + 核心接口：报名、退出、递补确认、超时扫描。</li>
+      <li><b>已完成 2：</b>前端页面：活动大厅、详情、我的活动、通知。</li>
+      <li><b>已完成 3：</b>按上一页标准做并发、超时测试，留测试记录。</li>
+      <li><b>第二次汇报：</b>6–7 分钟，现场演示为主，事先不只放录像。</li>
+      <li><b>期末：</b>提交纸质课程设计报告，附表结构、事务设计和测试结果。</li>
+    </ul>
+    <div class="notes">约25秒：核心接口、页面、并发与超时测试已经完成并留有记录，下一步是第二次汇报用六到七分钟现场演示，期末再交纸质报告。时间上先保证核心流程和测试记录，P2功能有余力再补。</div>
+  </section>
+
+  <section class="slide content">
+    <p><span class="num">11</span>　找个搭子</p>
+    <h2>运行截图 1：登录与大厅</h2><p class="sub">登录入口与大厅</p>
+    <img src="__SHOT1__" style="width:100%; max-height:520px; object-fit:contain; border:1px solid var(--line); border-radius:14px; background:#fff">
+    <p>登录、注册与快速登录都在登录卡片里；每个活动都显示正式 / 预留 / 候补三个数，羽毛球一行预留 1，正是递补进行时。</p>
+    <div class="notes">约20秒：登录卡片里有登录、注册与快速登录，下面大厅里每个活动都带着正式、预留、候补三个数，羽毛球这一行预留 1，说明正有一张邀请在等确认。</div>
+  </section>
+
+  <section class="slide content">
+    <p><span class="num">12</span>　找个搭子</p>
+    <h2>运行截图 2：递补邀请</h2><p class="sub">递补邀请的详情页</p>
+    <img src="__SHOT2__" style="width:100%; max-height:520px; object-fit:contain; border:1px solid var(--line); border-radius:14px; background:#fff">
+    <p>正式 3 + 预留 1 = 上限 4，没有超员；待确认写明截止时间，接受、拒绝、放弃候补三个按钮都在下面。</p>
+    <div class="notes">约20秒：递补邀请的详情页。正式三人加预留一人正好等于上限，候补同学看到待确认和截止时间，点接受就转正式，点拒绝或等超时就顺延给下一位。</div>
+  </section>
+
+  <section class="slide content">
+    <p><span class="num">13</span>　找个搭子</p>
+    <h2>运行截图 3：通知</h2><p class="sub">邀请不是只存在详情页里</p>
+    <img src="__SHOT3__" style="width:100%; max-height:520px; object-fit:contain; border:1px solid var(--line); border-radius:14px; background:#fff">
+    <p>未读 2 条：候补通知 + 邀请通知，邀请通知写明活动名、空缺与确认截止时间，可一键全部已读。</p>
+    <div class="notes">约20秒：通知页。候补同学会先收到进入候补的通知，有空缺时再收到邀请通知，写明截止时间，不用一直守着详情页刷。</div>
+  </section>
+
+  <section class="slide content">
+    <p><span class="num">14</span>　找个搭子</p>
+    <h2>运行截图 4：发布活动</h2><p class="sub">组织者视角，发布就填这张表</p>
+    <img src="__SHOT4__" style="width:100%; max-height:520px; object-fit:contain; border:1px solid var(--line); border-radius:14px; background:#fff">
+    <p>标题、类别、地点、人数上限、报名截止、开始、结束，时间顺序不对后端会直接拒绝。</p>
+    <div class="notes">约20秒：发布活动页。组织者填标题、类别、地点、上限和三个时间就能发布，时间顺序不对后端会直接拒绝，不会存进一张错的活动。</div>
+  </section>
+
+  <section class="slide demo">
+    <h1 style="font-size:54px">谢谢，请提问</h1>
+    <p style="font-size:24px; color:var(--grey)">一句话总结：满员不可怕，可怕的是名额算不清。</p>
+    <p style="font-size:22px; color:var(--grey)">我们的办法，就是用事务、行锁、唯一约束和条件更新把这笔账算清楚。</p>
+    <p style="color:var(--orange); font-weight:bold; margin-top:48px">13 小组 · 找个搭子 · Vue 3 + Spring Boot 3 + PostgreSQL</p>
+    <div class="notes">约15秒：谢谢大家。总结一句话，满员不可怕，可怕的是名额算不清，我们的办法就是用事务和约束把这笔账算清楚。请老师和同学提问。</div>
+  </section>
+</div>
+
+<div class="controls">
+  <button class="ghost" onclick="go(current-1)">← 上一页</button>
+  <span id="counter">1 / 14</span>
+  <button onclick="go(current+1)">下一页 →</button>
+  <button class="ghost" onclick="document.body.classList.toggle('show-notes')">讲稿</button>
+</div>
+<script>
+  const slides = document.querySelectorAll('.slide');
+  let current = 0;
+  function go(i) {
+    current = Math.max(0, Math.min(slides.length - 1, i));
+    slides.forEach((s, j) => s.classList.toggle('active', j === current));
+    document.getElementById('counter').textContent = (current + 1) + ' / ' + slides.length;
+    window.scrollTo(0, 0);
+  }
+  document.getElementById('counter').textContent = '1 / ' + slides.length;
+  document.addEventListener('keydown', e => {
+    if (e.target && e.target.closest && e.target.closest('button')) return;
+    if (e.key === 'ArrowRight') go(current + 1);
+    if (e.key === ' ') { e.preventDefault(); go(current + 1); }
+    if (e.key === 'ArrowLeft') go(current - 1);
+  });
+</script>
+</body>
+</html>

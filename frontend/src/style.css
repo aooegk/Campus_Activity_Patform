@@ -1,0 +1,134 @@
+/* 找个搭子 · Claude 逆向 UI 风格 token（只借风格，不抄 logo 与文案）
+   暖米白画布 #FAF9F5、墨色 #141413、陶土橙 #D97757、暖灰 #5E5D59、浅灰边框 #E8E6DC
+   原则：边框而非重阴影、无渐变、无大面积深色背景、标题带衬线感、大留白。 */
+:root {
+  --cream: #FAF9F5;
+  --paper: #FFFFFF;
+  --ink: #141413;
+  --grey: #5E5D59;
+  --line: #E8E6DC;
+  --orange: #D97757;
+  --orange-soft: #FDF1EC;
+  --orange-line: #EACFC4;
+}
+body {
+  font-family: "Microsoft YaHei", system-ui, sans-serif;
+  margin: 0;
+  background: var(--cream);
+  color: var(--ink);
+  line-height: 1.65;
+}
+header {
+  background: var(--cream);
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+  padding: 18px 24px;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+header h1 {
+  font-family: Georgia, "Songti SC", "STSong", "SimSun", serif;
+  font-size: 26px;
+  margin: 0;
+  letter-spacing: 0.5px;
+}
+header nav { display: flex; gap: 8px; flex-wrap: wrap; }
+header nav button {
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+header nav button.active { background: var(--orange); border-color: var(--orange); color: #fff; }
+header .user-greet { color: var(--grey); font-size: 14px; }
+main { max-width: 980px; margin: 0 auto; padding: 28px 24px 48px; }
+.card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 22px 24px;
+  margin-bottom: 16px;
+  box-shadow: none;
+}
+.card h3 {
+  font-family: Georgia, "Songti SC", "STSong", "SimSun", serif;
+  font-size: 21px;
+  margin: 0 0 10px;
+  color: var(--ink);
+}
+.card h4 { font-family: Georgia, "Songti SC", "STSong", "SimSun", serif; font-size: 16px; margin: 18px 0 8px; color: var(--ink); }
+.card p { margin: 8px 0; }
+.meta, .hint { color: var(--grey); font-size: 14px; line-height: 1.7; }
+button {
+  background: var(--paper);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  padding: 10px 18px;
+  border-radius: 10px;
+  cursor: pointer;
+  margin-right: 8px;
+  margin-bottom: 6px;
+  font-size: 15px;
+}
+button:hover { border-color: var(--orange); }
+button.primary { background: var(--orange); border-color: var(--orange); color: #fff; }
+button.primary:hover { filter: brightness(0.96); }
+button.warn { background: var(--paper); border-color: var(--orange-line); color: #A85A3F; }
+button.ghost { background: transparent; color: var(--grey); }
+input, select {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin: 4px 8px 4px 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 15px;
+}
+input:focus, select:focus { outline: 2px solid var(--orange); outline-offset: 1px; border-color: var(--orange); }
+.badge {
+  display: inline-block;
+  background: #F0EEE6;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 10px;
+  margin-right: 6px;
+  margin-bottom: 4px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.badge-accent { background: var(--orange-soft); border-color: var(--orange-line); color: #8F4A33; font-weight: 600; }
+.msg {
+  background: var(--orange-soft);
+  border: 1px solid var(--orange-line);
+  padding: 12px 16px;
+  border-radius: 12px;
+  margin-bottom: 16px;
+  color: var(--ink);
+}
+.unread { color: var(--orange); font-weight: 700; }
+/* 登录区：输入框纵向排列，避免三框并排在窄屏下拥挤 */
+.login input { display: block; width: 100%; max-width: 360px; box-sizing: border-box; margin: 6px 0; }
+.login button { margin-top: 8px; }
+/* 发布表单：标签在上、输入框在下，窄屏不溢出 */
+section.card label { display: block; margin: 14px 0; color: var(--grey); font-size: 14px; }
+section.card label input, section.card label select {
+  display: block;
+  width: 100%;
+  max-width: 440px;
+  box-sizing: border-box;
+  margin: 6px 0 0;
+  color: var(--ink);
+}
+@media (max-width: 640px) {
+  header { padding: 14px 16px; position: static; }
+  header h1 { font-size: 22px; }
+  main { padding: 16px; }
+  .card { padding: 16px; border-radius: 14px; }
+  .card h3 { font-size: 19px; }
+  button { padding: 9px 14px; }
+  section.card label input, section.card label select { max-width: none; }
+}

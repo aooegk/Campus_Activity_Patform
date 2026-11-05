@@ -1,0 +1,308 @@
+package com.campusbuddy.controller;
+
+import com.campusbuddy.service.AuthService;
+import com.campusbuddy.service.BuddyService;
+import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.bind.annotation.*;
+
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.util.*;
+
+@RestController
+@RequestMapping("/api")
+public class ApiController {
+    private final JdbcTemplate jdbc;
+    private final AuthService auth;
+    private final BuddyService buddy;
+
+    public ApiController(JdbcTemplate jdbc, AuthService auth, BuddyService buddy) {
+        this.jdbc = jdbc; this.auth = auth; this.buddy = buddy;
+    }
+
+    private Long require(String authHeader) {
+        Long id = auth.userId(authHeader);
+        if (id == null) throw new IllegalStateException("未登录");
+        // 停用账号的旧 token 不能再操作：登录时拦停用只是第一道关，
+        // token 发出后被停用的账号必须在每次鉴权时再查一次状态。
+        var user = auth.me(id);
+        if (!"ACTIVE".equals(user.get("status"))) throw new IllegalStateException("账号已停用");
+        return id;
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<Map<String, Object>> handle(IllegalStateException e) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(Map.of("ok", false, "error", e.getMessage()));
+    }
+
+    @ExceptionHandler(EmptyResultDataAccessException.class)
+    public ResponseEntity<Map<String, Object>> handleNotFound(EmptyResultDataAccessException e) {
+        // 查不到记录（不存在的活动 / 参与记录 / 邀请）是客户端错误，不应返回 500。
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(Map.of("ok", false, "error", "记录不存在"));
+    }
+
+    // ---- 健康 / 配置 ----
+    @GetMapping("/health")
+    public Map<String, Object> health() {
+        return Map.of("ok", true, "server_time", LocalDateTime.now().toString(),
+                "invite_ttl_seconds", buddy.inviteTtlSeconds(),
+                "users", jdbc.queryForObject("SELECT COUNT(*) FROM app_user", Integer.class),
+                "activities", jdbc.queryForObject("SELECT COUNT(*) FROM activity", Integer.class));
+    }
+
+    // ---- 账号 ----
+    @PostMapping("/login")
+    public Map<String, Object> login(@RequestBody Map<String, String> body) {
+        String token = auth.login(body.get("account"), body.get("password"));
+        if (token == null) throw new IllegalStateException("账号或密码错误");
+        Long id = auth.userId("Bearer " + token);
+        return Map.of("ok", true, "token", token, "user", auth.me(id));
+    }
+
+    @PostMapping("/register")
+    public Map<String, Object> register(@RequestBody Map<String, String> body) {
+        String account = body.get("account"), password = body.get("password");
+        if (account == null || account.length() < 4 || account.length() > 32)
+            throw new IllegalStateException("账号需为 4-32 字符");
+        if (password == null || password.length() < 6)
+            throw new IllegalStateException("密码至少 6 位");
+        // 旧代码不校验昵称长度，超长时数据库 CHECK 报错被 catch 全吞，
+        // 统一误报为“账号已存在”。先校验，再按异常原因区分报错。
+        String nickname = body.get("nickname");
+        if (nickname == null || nickname.isBlank()) nickname = account;
+        if (nickname.codePointCount(0, nickname.length()) < 1 || nickname.codePointCount(0, nickname.length()) > 30)
+            throw new IllegalStateException("昵称需为 1-30 字");
+        try {
+            jdbc.update("INSERT INTO app_user(account, password_hash, nickname) VALUES (?,?,?)",
+                    account, AuthService.hash(password), nickname);
+        } catch (Exception e) {
+            // 只有唯一约束冲突才是“账号已存在”，其他数据库错误不再冒充它。
+            Throwable t = e;
+            while (t != null) {
+                String m = t.getMessage();
+                if (m != null && m.contains("duplicate key")) throw new IllegalStateException("账号已存在");
+                t = t.getCause();
+            }
+            throw new IllegalStateException("注册失败，请重试");
+        }
+        return Map.of("ok", true);
+    }
+
+    @GetMapping("/me")
+    public Map<String, Object> me(@RequestHeader(value = "Authorization", required = false) String h) {
+        return Map.of("ok", true, "user", auth.me(require(h)));
+    }
+
+    // ---- 活动大厅 ----
+    @GetMapping("/activities")
+    public List<Map<String, Object>> activities(
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String category,
+            @RequestHeader(value = "Authorization", required = false) String h) {
+        Long me = auth.userId(h);
+        // 停用账号只读大厅时也不再带上本人状态，避免旧 token 在只读路径上仍被当作有效身份。
+        if (me != null) {
+            try {
+                if (!"ACTIVE".equals(auth.me(me).get("status"))) me = null;
+            } catch (Exception e) { me = null; }
+        }
+        String sql = "SELECT a.*, u.nickname AS organizer_name, " +
+                "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='FORMAL') AS formal_count, " +
+                "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='WAITING') AS waiting_count, " +
+                "(SELECT COUNT(*) FROM invitation i JOIN participation p ON p.id=i.participation_id " +
+                " WHERE p.activity_id=a.id AND i.status='PENDING' AND i.expires_at > now()) AS reserved_count " +
+                "FROM activity a JOIN app_user u ON u.id=a.organizer_id WHERE 1=1 ";
+        List<Object> args = new ArrayList<>();
+        if (q != null && !q.isBlank()) { sql += "AND a.title LIKE ? "; args.add("%" + q.trim() + "%"); }
+        if (category != null && !category.isBlank() && !"全部".equals(category)) {
+            sql += "AND a.category = ? "; args.add(category);
+        }
+        sql += "ORDER BY a.start_time, a.id";
+        var rows = jdbc.queryForList(sql, args.toArray());
+        if (me != null) {
+            for (var row : rows) {
+                var mine = jdbc.queryForList(
+                        "SELECT status FROM participation WHERE activity_id=? AND user_id=?",
+                        row.get("id"), me);
+                row.put("my_status", mine.isEmpty() ? null : mine.get(0).get("status"));
+            }
+        }
+        return rows;
+    }
+
+    @GetMapping("/activities/{id}")
+    public Map<String, Object> activityDetail(@PathVariable long id,
+            @RequestHeader(value = "Authorization", required = false) String h) {
+        Long me = auth.userId(h);
+        var act = jdbc.queryForMap("SELECT a.*, u.nickname AS organizer_name FROM activity a " +
+                "JOIN app_user u ON u.id=a.organizer_id WHERE a.id=?", id);
+        Map<String, Object> out = new LinkedHashMap<>(act);
+        if (me != null) out.putAll(buddy.detail(id, me));
+        // 组织者可见名单与候补队列；其他人只能看到人数
+        if (me != null && Objects.equals(((Number) act.get("organizer_id")).longValue(), me)) {
+            out.put("roster", jdbc.queryForList(
+                    "SELECT p.*, u.nickname FROM participation p JOIN app_user u ON u.id=p.user_id " +
+                    "WHERE p.activity_id=? AND p.status IN ('FORMAL','WAITING','INVITED') " +
+                    "ORDER BY CASE p.status WHEN 'FORMAL' THEN 0 WHEN 'INVITED' THEN 1 ELSE 2 END, p.queued_at, p.id", id));
+            out.put("pending_invitations", jdbc.queryForList(
+                    "SELECT i.*, u.nickname FROM invitation i JOIN participation p ON p.id=i.participation_id " +
+                    "JOIN app_user u ON u.id=p.user_id WHERE p.activity_id=? AND i.status='PENDING' ORDER BY i.expires_at", id));
+        }
+        return out;
+    }
+
+    @PostMapping("/activities")
+    public Map<String, Object> create(@RequestBody Map<String, Object> body,
+            @RequestHeader(value = "Authorization", required = false) String h) {
+        long me = require(h);
+        // 旧代码对空标题、缺地点、非法类别、缺容量一律不校验，
+        // 走到数据库约束或空指针时直接返回 500；且用 SELECT MAX(id) 取新活动 id，
+        // 并发创建时多个请求会拿到同一个（别人的）id。全部在此处校验 + RETURNING 取 id。
+        String title = body.get("title") instanceof String ? (String) body.get("title") : null;
+        if (title == null || title.isBlank() || title.codePointCount(0, title.length()) > 50)
+            throw new IllegalStateException("标题需为 1-50 字");
+        String location = body.get("location") instanceof String ? (String) body.get("location") : null;
+        if (location == null || location.isBlank() || location.codePointCount(0, location.length()) > 100)
+            throw new IllegalStateException("地点需为 1-100 字");
+        Integer capacity = null;
+        Object capRaw = body.get("capacity");
+        if (capRaw instanceof Number) capacity = ((Number) capRaw).intValue();
+        else if (capRaw instanceof String) {
+            try { capacity = Integer.parseInt(((String) capRaw).trim()); } catch (NumberFormatException ignored) { }
+        }
+        if (capacity == null || capacity < 1 || capacity > 100)
+            throw new IllegalStateException("人数上限需为 1-100");
+        String category = body.get("category") instanceof String ? (String) body.get("category") : "其他";
+        if (!Set.of("羽毛球", "桌游", "学习组", "其他").contains(category))
+            throw new IllegalStateException("类别不合法");
+        String description = body.get("description") instanceof String ? (String) body.get("description") : "";
+        String conditions = body.get("conditions") instanceof String ? (String) body.get("conditions") : "";
+        if (description.codePointCount(0, description.length()) > 2000)
+            throw new IllegalStateException("介绍不能超过 2000 字");
+        if (conditions.codePointCount(0, conditions.length()) > 500)
+            throw new IllegalStateException("参与条件不能超过 500 字");
+        LocalDateTime deadline, start, end;
+        try {
+            deadline = LocalDateTime.parse((String) body.get("deadline"));
+            start = LocalDateTime.parse((String) body.get("start_time"));
+            end = LocalDateTime.parse((String) body.get("end_time"));
+        } catch (Exception e) {
+            throw new IllegalStateException("时间格式不正确");
+        }
+        if (!(LocalDateTime.now().isBefore(deadline) && !deadline.isAfter(start) && start.isBefore(end)))
+            throw new IllegalStateException("时间需满足：现在 < 报名截止 ≤ 开始 < 结束");
+        Long id = jdbc.queryForObject(
+                "INSERT INTO activity(organizer_id, title, category, description, conditions, location, capacity, deadline, start_time, end_time) " +
+                "VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id",
+                Long.class,
+                me, title, category, description, conditions, location, capacity,
+                Timestamp.valueOf(deadline), Timestamp.valueOf(start), Timestamp.valueOf(end));
+        return Map.of("ok", true, "id", id);
+    }
+
+    @Transactional
+    @PostMapping("/activities/{id}/cancel")
+    public Map<String, Object> cancel(@PathVariable long id,
+            @RequestHeader(value = "Authorization", required = false) String h) {
+        long me = require(h);
+        var act = jdbc.queryForMap("SELECT organizer_id FROM activity WHERE id=?", id);
+        if (!Objects.equals(((Number) act.get("organizer_id")).longValue(), me))
+            throw new IllegalStateException("只有组织者可以取消活动");
+        // 与 respondInvitation / withdraw 保持同一锁顺序：先锁参与记录，再改邀请。
+        // 旧代码不加事务、不锁记录，取消与接受并发时同样可能出现锁顺序倒置。
+        jdbc.queryForList("SELECT id FROM participation WHERE activity_id=? " +
+                "AND status IN ('FORMAL','WAITING','INVITED') FOR UPDATE", id);
+        jdbc.update("UPDATE activity SET status='CANCELLED', updated_at=? WHERE id=?",
+                Timestamp.valueOf(LocalDateTime.now()), id);
+        jdbc.update("UPDATE invitation SET status='INVALID' WHERE participation_id IN " +
+                "(SELECT id FROM participation WHERE activity_id=?) AND status='PENDING'", id);
+        jdbc.update("UPDATE participation SET status='CANCELLED' WHERE activity_id=? AND status IN ('FORMAL','WAITING','INVITED')", id);
+        return Map.of("ok", true);
+    }
+
+    // ---- 报名 / 退出 / 递补 ----
+    @PostMapping("/activities/{id}/signup")
+    public Map<String, Object> signup(@PathVariable long id,
+            @RequestHeader(value = "Authorization", required = false) String h) {
+        return buddy.signup(id, require(h));
+    }
+
+    @PostMapping("/participations/{id}/withdraw")
+    public Map<String, Object> withdraw(@PathVariable long id,
+            @RequestHeader(value = "Authorization", required = false) String h) {
+        return buddy.withdraw(id, require(h));
+    }
+
+    @PostMapping("/invitations/{id}/accept")
+    public Map<String, Object> accept(@PathVariable long id,
+            @RequestHeader(value = "Authorization", required = false) String h) {
+        return buddy.respondInvitation(id, require(h), true);
+    }
+
+    @PostMapping("/invitations/{id}/reject")
+    public Map<String, Object> reject(@PathVariable long id,
+            @RequestHeader(value = "Authorization", required = false) String h) {
+        return buddy.respondInvitation(id, require(h), false);
+    }
+
+    // ---- 我的活动 / 通知 ----
+    @GetMapping("/my")
+    public List<Map<String, Object>> my(@RequestHeader(value = "Authorization", required = false) String h) {
+        long me = require(h);
+        return jdbc.queryForList(
+                "SELECT p.*, a.title, a.location, a.capacity, a.start_time, a.deadline, " +
+                "(SELECT i.id FROM invitation i WHERE i.participation_id=p.id AND i.status='PENDING' ORDER BY i.id DESC LIMIT 1) AS invitation_id, " +
+                "(SELECT i.expires_at FROM invitation i WHERE i.participation_id=p.id AND i.status='PENDING' ORDER BY i.id DESC LIMIT 1) AS invitation_expires_at " +
+                "FROM participation p JOIN activity a ON a.id=p.activity_id WHERE p.user_id=? " +
+                "ORDER BY p.updated_at DESC", me);
+    }
+
+    @GetMapping("/notifications")
+    public Map<String, Object> notifications(@RequestHeader(value = "Authorization", required = false) String h) {
+        long me = require(h);
+        return Map.of("list", jdbc.queryForList(
+                        "SELECT * FROM notification WHERE user_id=? ORDER BY created_at DESC LIMIT 50", me),
+                "unread", jdbc.queryForObject(
+                        "SELECT COUNT(*) FROM notification WHERE user_id=? AND read_at IS NULL", Integer.class, me));
+    }
+
+    @PostMapping("/notifications/read-all")
+    public Map<String, Object> readAll(@RequestHeader(value = "Authorization", required = false) String h) {
+        long me = require(h);
+        jdbc.update("UPDATE notification SET read_at=? WHERE user_id=? AND read_at IS NULL",
+                Timestamp.valueOf(LocalDateTime.now()), me);
+        return Map.of("ok", true);
+    }
+
+    // ---- 演示重置（仅演示用）：清空业务数据并恢复种子 ----
+    // 修复前：无需任何登录即可调用，且不清空内存会话。序列重启后新注册用户
+    // 会复用旧用户的 id，旧 token 不经任何校验就能冒用新用户（已复现）。
+    // 修复后：必须登录才能重置；种子写入成功后清空全部会话；删除 + 种子在同一事务内。
+    @Transactional
+    @PostMapping("/demo/reset")
+    public Map<String, Object> reset(@RequestHeader(value = "Authorization", required = false) String h) {
+        require(h);
+        jdbc.update("DELETE FROM feedback");
+        jdbc.update("DELETE FROM notification");
+        jdbc.update("DELETE FROM invitation");
+        jdbc.update("DELETE FROM participation");
+        jdbc.update("DELETE FROM activity");
+        jdbc.update("DELETE FROM app_user");
+        // 重置自增序列，避免演示时编号无限增长
+        jdbc.execute("ALTER SEQUENCE app_user_id_seq RESTART WITH 1");
+        jdbc.execute("ALTER SEQUENCE activity_id_seq RESTART WITH 1");
+        jdbc.execute("ALTER SEQUENCE participation_id_seq RESTART WITH 1");
+        jdbc.execute("ALTER SEQUENCE invitation_id_seq RESTART WITH 1");
+        jdbc.execute("ALTER SEQUENCE notification_id_seq RESTART WITH 1");
+        // 种子逻辑与 SeedRunner 相同，这里直接复用其 run()（空库时写入）
+        new com.campusbuddy.service.SeedRunner(jdbc).run();
+        auth.clearSessions();
+        return Map.of("ok", true);
+    }
+}
