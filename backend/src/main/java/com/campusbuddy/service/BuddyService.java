@@ -160,6 +160,11 @@ public class BuddyService {
         } else {
             throw new IllegalStateException("当前状态不可退出：" + st);
         }
+        // 任务 3-2：退出产生一条通知，否则退出前后两条「报名成功」无法分辨。
+        // 类型用 '变更'（notification 表 CHECK 只允许 报名/候补/邀请/变更，不改表）。
+        String title = jdbc.queryForObject("SELECT title FROM activity WHERE id=?", String.class, activityId);
+        notify(userId, activityId, null, "变更", "你已退出活动「" + title + "」。",
+                "notify:withdraw:" + participationId + ":" + now);
         return detail(activityId, userId);
     }
 
@@ -217,13 +222,22 @@ public class BuddyService {
         // 在超时与退出并发时同样可能死锁。
         var inv0 = jdbc.queryForMap("SELECT participation_id FROM invitation WHERE id=?", invitationId);
         long partId = ((Number) inv0.get("participation_id")).longValue();
-        var part = jdbc.queryForMap("SELECT activity_id FROM participation WHERE id=? FOR UPDATE", partId);
+        var part = jdbc.queryForMap("SELECT activity_id, user_id FROM participation WHERE id=? FOR UPDATE", partId);
         long activityId = ((Number) part.get("activity_id")).longValue();
+        long userId = ((Number) part.get("user_id")).longValue();
         int changed = jdbc.update(
                 "UPDATE invitation SET status='EXPIRED' WHERE id=? AND status='PENDING' AND expires_at <= ?",
                 invitationId, ts(now));
         if (changed != 1) return false;
         jdbc.update("UPDATE participation SET status='EXPIRED', updated_at=? WHERE id=?", ts(now), partId);
+        // 任务 3-3：邀请过期要让被邀请人知道。原邀请通知标为已读（不再挂「未读」），
+        // 再发一条过期通知。类型用 '邀请'（notification 表 CHECK 允许，不改表）。
+        String title = jdbc.queryForObject("SELECT title FROM activity WHERE id=?", String.class, activityId);
+        jdbc.update("UPDATE notification SET read_at=? WHERE invitation_id=? AND type='邀请' AND read_at IS NULL",
+                ts(now), invitationId);
+        notify(userId, activityId, invitationId, "邀请",
+                "活动「" + title + "」的递补邀请已过期，名额已顺延至下一位候补。",
+                "notify:expired:" + invitationId);
         promote(activityId, now);
         return true;
     }
@@ -236,6 +250,9 @@ public class BuddyService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("activity_id", activityId);
         out.put("title", act.get("title"));
+        // 任务 1：报名接口返回补齐介绍与条件，否则前端用返回体覆盖详情时会变空白
+        out.put("description", act.get("description"));
+        out.put("conditions", act.get("conditions"));
         out.put("capacity", act.get("capacity"));
         out.put("formal", formalCount(activityId));
         out.put("reserved", reservedCount(activityId, now));

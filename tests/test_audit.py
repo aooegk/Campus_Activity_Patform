@@ -32,7 +32,7 @@ def make_activity(tok, title, cap=2):
     s, d = req("POST", "/activities", token=tok, body={
         "title": title, "category": "其他", "description": "审计测试",
         "conditions": "", "location": "线上", "capacity": cap,
-        "deadline": "2026-11-01T20:00:00", "start_time": "2026-11-02T20:00:00", "end_time": "2026-11-02T22:00:00"})
+        "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"})
     assert d.get("ok"), d; return d["id"]
 
 # --- 0. 基线：先登录（种子已存在），再用演示重置恢复干净状态 ---
@@ -55,13 +55,13 @@ check("A1b 第二次同样注册仍不误报账号已存在（未产生脏数据
 # --- 2. 创建活动：非法入参应400，而不是500 ---
 for name, body in [
     ("A2 空标题", {"title": "", "category": "其他", "description": "", "conditions": "", "location": "线上", "capacity": 2,
-                    "deadline": "2026-11-01T20:00:00", "start_time": "2026-11-02T20:00:00", "end_time": "2026-11-02T22:00:00"}),
+                    "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"}),
     ("A3 缺少地点", {"title": "缺地点", "category": "其他", "description": "", "conditions": "", "capacity": 2,
-                    "deadline": "2026-11-01T20:00:00", "start_time": "2026-11-02T20:00:00", "end_time": "2026-11-02T22:00:00"}),
+                    "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"}),
     ("A4 非法类别", {"title": "非法类别", "category": "不存在", "description": "", "conditions": "", "location": "线上", "capacity": 2,
-                    "deadline": "2026-11-01T20:00:00", "start_time": "2026-11-02T20:00:00", "end_time": "2026-11-02T22:00:00"}),
+                    "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"}),
     ("A5 缺少容量", {"title": "缺容量", "category": "其他", "description": "", "conditions": "", "location": "线上",
-                    "deadline": "2026-11-01T20:00:00", "start_time": "2026-11-02T20:00:00", "end_time": "2026-11-02T22:00:00"}),
+                    "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"}),
 ]:
     s, d = req("POST", "/activities", token=org, body=body)
     check(name + "应返回400", s == 400, (s, d))
@@ -70,7 +70,7 @@ for name, body in [
 def create_one(i):
     s, d = req("POST", "/activities", token=org, body={
         "title": f"并发创建-{i}", "category": "其他", "description": "", "conditions": "", "location": "线上", "capacity": 2,
-        "deadline": "2026-11-01T20:00:00", "start_time": "2026-11-02T20:00:00", "end_time": "2026-11-02T22:00:00"})
+        "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"})
     return i, d.get("id")
 with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
     pairs = list(ex.map(create_one, range(10)))
@@ -132,7 +132,7 @@ subprocess.run(["/tmp/pgsql/usr/lib/postgresql/16/bin/psql", "-h", "/tmp/pgrun",
                env=env, capture_output=True)
 s, d = req("POST", "/activities", token=tokD, body={
     "title": "停用账号创建", "category": "其他", "description": "", "conditions": "", "location": "线上", "capacity": 2,
-    "deadline": "2026-11-01T20:00:00", "start_time": "2026-11-02T20:00:00", "end_time": "2026-11-02T22:00:00"})
+    "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"})
 check("A10 停用账号的旧token不应再创建活动", s in (400, 401, 403), (s, d))
 s, d = req("POST", "/login", body={"account": "auditdis", "password": "12345678"})
 check("A10b 停用账号重新登录应失败（既有行为对照）", d.get("ok") is False, (s, d))

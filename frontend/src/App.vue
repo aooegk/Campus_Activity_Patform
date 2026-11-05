@@ -38,6 +38,7 @@
       <div v-if="detail" class="card">
         <h3>详情：{{ detail.title }}</h3>
         <p>{{ detail.description }}　条件：{{ detail.conditions }}</p>
+        <p class="meta">时间：{{ fmt(detail.start_time) }} – {{ fmt(detail.end_time) }}　地点：{{ detail.location }}　组织者：{{ detail.organizer_name }}　报名截止：{{ fmt(detail.deadline) }}</p>
         <p class="meta">正式 {{ detail.formal }}/{{ detail.capacity }}　预留 {{ detail.reserved }}　候补 {{ detail.waiting }}
           <span v-if="detail.my_status">　我的状态：{{ statusText(detail.my_status) }}
             <span v-if="detail.my_rank">，候补第 {{ detail.my_rank }} 名</span>
@@ -70,12 +71,25 @@
     </section>
 
     <section v-if="view==='my'">
+      <h3 class="subhead">我组织的</h3>
+      <div v-for="o in organized" :key="'org-' + o.id" class="card">
+        <h3>{{ o.title }}</h3>
+        <p>
+          <span class="badge">{{ o.category }}</span><span class="badge">{{ o.location }}</span>
+          <span class="badge">正式 {{ o.formal_count }}/{{ o.capacity }}</span>
+          <span class="badge">预留 {{ o.reserved_count }}</span><span class="badge">候补 {{ o.waiting_count }} 人</span>
+        </p>
+        <p class="meta">报名截止：{{ fmt(o.deadline) }}　开始：{{ fmt(o.start_time) }}　状态：{{ o.status }}</p>
+        <button @click="go('hall'); openDetail(o.id)">查看详情</button>
+      </div>
+      <p v-if="!organized.length" class="meta">暂无组织的活动。</p>
+      <h3 class="subhead">我报名的</h3>
       <div v-for="p in mine" :key="p.id" class="card">
         <h3>{{ p.title }}</h3>
         <p class="meta">状态：{{ statusText(p.status) }}　地点：{{ p.location }}　开始：{{ fmt(p.start_time) }}
           <span v-if="p.invitation_expires_at">　请在 {{ fmt(p.invitation_expires_at) }} 前确认</span>
         </p>
-        <button v-if="['FORMAL','WAITING','INVITED'].includes(p.status)" class="warn" @click="withdraw(p.id); loadMy()">取消 / 放弃</button>
+        <button v-if="['FORMAL','WAITING','INVITED'].includes(p.status)" class="warn" @click="withdraw(p.id)">取消 / 放弃</button>
         <button v-if="['WITHDRAWN','EXPIRED','CANCELLED'].includes(p.status)" class="primary" @click="resignup(p.activity_id)">重新报名</button>
         <button v-if="p.invitation_id && p.status==='INVITED'" class="primary" @click="accept(p.invitation_id); loadMy()">接受递补</button>
         <button v-if="p.invitation_id && p.status==='INVITED'" class="warn" @click="reject(p.invitation_id); loadMy()">拒绝递补</button>
@@ -116,7 +130,7 @@ const user = ref(null)
 const token = ref(localStorage.getItem('token') || '')
 const account = ref(''), password = ref('123456'), nickname = ref('')
 const msg = ref('')
-const hall = ref([]), detail = ref(null), mine = ref([]), notifs = ref([]), unread = ref(0)
+const hall = ref([]), detail = ref(null), mine = ref([]), organized = ref([]), notifs = ref([]), unread = ref(0)
 const q = ref(''), category = ref('')
 const form = ref({ title: '', category: '羽毛球', location: '', capacity: 4, deadline: '', start_time: '', end_time: '', description: '', conditions: '' })
 
@@ -162,11 +176,31 @@ async function loadHall() {
   } catch (e) { msg.value = e.message }
 }
 async function openDetail(id) { try { detail.value = await api('/api/activities/' + id); msg.value = '' } catch (e) { msg.value = e.message } }
-async function signup(id) { try { detail.value = await api('/api/activities/' + id + '/signup', 'POST'); msg.value = '报名结果：' + statusText(detail.value.my_status); loadHall() } catch (e) { msg.value = e.message } }
-async function withdraw(pid) { try { await api('/api/participations/' + pid + '/withdraw', 'POST'); msg.value = '已退出'; if (detail.value) openDetail(detail.value.id || detail.value.activity_id) } catch (e) { msg.value = e.message } }
+async function signup(id) {
+  try {
+    const j = await api('/api/activities/' + id + '/signup', 'POST')
+    // 任务 1 + P1-6：报名返回只含 detail() 的字段（无时间/地点/组织者），
+    // 直接用它覆盖详情会让 P1-6 那行变空白；改走重新拉详情（全字段），
+    // 再置提示（openDetail 会清空 msg，须在它之后设置）。
+    await openDetail(id)
+    msg.value = '报名结果：' + statusText(j.my_status)
+    loadHall()
+  } catch (e) { msg.value = e.message }
+}
+async function withdraw(pid) {
+  try {
+    await api('/api/participations/' + pid + '/withdraw', 'POST')
+    // 任务 3-1：详情刷新会清空提示（openDetail 置空 msg），先等刷新完成再置提示；
+    // 刷新失败也不吞掉「已退出」。
+    if (detail.value) { try { await openDetail(detail.value.id || detail.value.activity_id) } catch (_) {} }
+    msg.value = '已退出'
+    if (view.value === 'my') { loadMy(); loadOrganized() } else { loadHall() }
+  } catch (e) { msg.value = e.message }
+}
 async function accept(id) { try { await api('/api/invitations/' + id + '/accept', 'POST'); msg.value = '已接受递补'; if (detail.value) openDetail(detail.value.id || detail.value.activity_id); loadMy() } catch (e) { msg.value = e.message } }
 async function reject(id) { try { await api('/api/invitations/' + id + '/reject', 'POST'); msg.value = '已拒绝递补'; if (detail.value) openDetail(detail.value.id || detail.value.activity_id); loadMy() } catch (e) { msg.value = e.message } }
 async function loadMy() { try { mine.value = await api('/api/my') } catch (e) { msg.value = e.message } }
+async function loadOrganized() { try { organized.value = await api('/api/my/organized') } catch (e) { msg.value = e.message } }
 async function loadNotif() { try { const j = await api('/api/notifications'); notifs.value = j.list; unread.value = j.unread } catch (e) { msg.value = e.message } }
 async function readAll() { await api('/api/notifications/read-all', 'POST'); loadNotif() }
 async function cancelActivity(id) { if (!confirm('确认取消该活动吗？')) return; try { await api('/api/activities/' + id + '/cancel', 'POST'); msg.value = '活动已取消'; loadHall() } catch (e) { msg.value = e.message } }
@@ -177,7 +211,7 @@ async function publish() {
   } catch (e) { msg.value = e.message }
 }
 async function resetDemo() { if (!confirm('确认恢复演示数据吗？当前业务数据会被清空。')) return; await api('/api/demo/reset', 'POST'); msg.value = '演示数据已恢复'; loadHall() }
-function go(v) { view.value = v; if (v === 'my') loadMy(); if (v === 'notif') loadNotif(); if (v === 'hall') loadHall() }
+function go(v) { view.value = v; if (v === 'my') { loadMy(); loadOrganized() } if (v === 'notif') loadNotif(); if (v === 'hall') loadHall() }
 onMounted(async () => {
   loadHall()
   if (token.value) { try { const j = await api('/api/me'); user.value = j.user } catch { logout() } }

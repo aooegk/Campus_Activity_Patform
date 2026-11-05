@@ -123,6 +123,8 @@ section.card label input, section.card label select {
   margin: 6px 0 0;
   color: var(--ink);
 }
+/* 「我的活动」分区小标题：沿用卡片标题的衬线字体与墨色，不引入新 token */
+.subhead { font-family: Georgia, "Songti SC", "STSong", "SimSun", serif; font-size: 19px; margin: 20px 0 10px; color: var(--ink); }
 @media (max-width: 640px) {
   header { padding: 14px 16px; position: static; }
   header h1 { font-size: 22px; }

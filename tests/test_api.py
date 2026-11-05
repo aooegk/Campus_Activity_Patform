@@ -100,7 +100,7 @@ def main():
     newa = req("POST", "/activities", token=org, body={
         "title": "并发测试活动", "category": "其他", "description": "并发测试",
         "conditions": "", "location": "线上", "capacity": 4,
-        "deadline": "2026-11-01T20:00:00", "start_time": "2026-11-02T20:00:00", "end_time": "2026-11-02T22:00:00"})
+        "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"})
     check("新建并发测试活动", newa.get("ok") is True, str(newa))
     cid = newa["id"]
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
@@ -113,7 +113,7 @@ def main():
     newa2 = req("POST", "/activities", token=org, body={
         "title": "重复提交测试", "category": "其他", "description": "重复测试",
         "conditions": "", "location": "线上", "capacity": 10,
-        "deadline": "2026-11-01T20:00:00", "start_time": "2026-11-02T20:00:00", "end_time": "2026-11-02T22:00:00"})
+        "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"})
     cid2 = newa2["id"]
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
         list(ex.map(lambda _: req("POST", f"/activities/{cid2}/signup", token=toks["demo01"]), range(10)))

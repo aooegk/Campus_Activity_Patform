@@ -263,6 +263,20 @@ public class ApiController {
                 "ORDER BY p.updated_at DESC", me);
     }
 
+    // 任务 2：我组织的活动（带正式/候补/预留人数）。新接口，不改 /api/my 的返回形状
+    // （测试与前端都按列表使用它），苏晴在前端另调此接口渲染「我组织的」一栏。
+    @GetMapping("/my/organized")
+    public List<Map<String, Object>> myOrganized(@RequestHeader(value = "Authorization", required = false) String h) {
+        long me = require(h);
+        return jdbc.queryForList(
+                "SELECT a.*, " +
+                "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='FORMAL') AS formal_count, " +
+                "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='WAITING') AS waiting_count, " +
+                "(SELECT COUNT(*) FROM invitation i JOIN participation p ON p.id=i.participation_id " +
+                " WHERE p.activity_id=a.id AND i.status='PENDING' AND i.expires_at > now()) AS reserved_count " +
+                "FROM activity a WHERE a.organizer_id=? ORDER BY a.start_time, a.id", me);
+    }
+
     @GetMapping("/notifications")
     public Map<String, Object> notifications(@RequestHeader(value = "Authorization", required = false) String h) {
         long me = require(h);

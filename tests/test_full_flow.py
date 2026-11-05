@@ -42,7 +42,7 @@ d1, d2, d3 = login("demo01"), login("demo02"), login("demo03")
 a = req("POST", "/activities", token=org, body={
     "title": "全流程测试：羽毛球", "category": "羽毛球", "description": "端到端测试",
     "conditions": "", "location": "体育馆", "capacity": 2,
-    "deadline": "2026-11-01T20:00:00", "start_time": "2026-11-02T20:00:00", "end_time": "2026-11-02T22:00:00"})
+    "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"})
 check("组织者发布活动", a.get("ok") is True, str(a)); aid = a["id"]
 
 # 3 报名：2 正式，第 3 人候补
