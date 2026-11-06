@@ -7,6 +7,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 
 /**
@@ -39,6 +42,34 @@ public class BuddyService {
     }
 
     public int inviteTtlSeconds() { return inviteTtlSeconds; }
+
+    /** 全站时间约定（2026-11-06 任务 1/2 根因，见当日 changes.md）：
+     *  库里 TIMESTAMP 列存的是 UTC 墙钟时间：JVM 默认时区 UTC、PG now() UTC、
+     *  Java LocalDateTime.now() 取 UTC 墙钟，三者一致；Jackson 按
+     *  spring.jackson.time-zone=Asia/Shanghai 把存入的时刻渲染成 +08:00，
+     *  前端直接显示即为用户填的本地时间。
+     *  唯一的例外是发布入口：前端 datetime-local 发来的是上海墙钟，
+     *  必须先转成 UTC 墙钟再入库；反过来，拼给用户看的文案要把 UTC 墙钟
+     *  转回上海墙钟再格式化。不要改 JVM 时区或 Jackson 配置——那会
+     *  打破 PG now() 生成的 created_at 等字段的既有换算。 */
+    public static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
+    private static final DateTimeFormatter MINUTE_FMT =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+
+    /** 上海墙钟 → UTC 墙钟（入库用）。 */
+    public static LocalDateTime shanghaiToUtcWall(LocalDateTime shanghaiWall) {
+        return shanghaiWall.atZone(SHANGHAI).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+    }
+
+    /** UTC 墙钟 → 上海墙钟（展示用）。 */
+    public static LocalDateTime utcWallToShanghai(LocalDateTime utcWall) {
+        return utcWall.atZone(ZoneOffset.UTC).withZoneSameInstant(SHANGHAI).toLocalDateTime();
+    }
+
+    /** UTC 墙钟 → 上海墙钟 "yyyy-MM-dd HH:mm"（通知文案用，无 T、无纳秒）。 */
+    public static String fmtShanghaiMinute(LocalDateTime utcWall) {
+        return utcWallToShanghai(utcWall).format(MINUTE_FMT);
+    }
 
     private static Timestamp ts(LocalDateTime t) { return Timestamp.valueOf(t); }
 
@@ -110,7 +141,7 @@ public class BuddyService {
             String title = jdbc.queryForObject(
                     "SELECT title FROM activity WHERE id=?", String.class, activityId);
             notify(userId, activityId, invId, "邀请",
-                    "活动「" + title + "」已有空缺，请在 " + expires + " 前确认是否参加。",
+                    "活动「" + title + "」已有空缺，请在 " + fmtShanghaiMinute(expires) + " 前确认是否参加。",
                     "notify:" + eventKey);
         }
     }
@@ -288,13 +319,15 @@ public class BuddyService {
             var m = mine.get(0);
             out.put("my_status", m.get("status"));
             out.put("participation_id", m.get("id"));
-            out.put("my_queued_at", m.get("queued_at") == null ? null : asLocalDateTime(m.get("queued_at")).toString());
+            out.put("my_queued_at", m.get("queued_at") == null ? null : utcWallToShanghai(asLocalDateTime(m.get("queued_at"))).toString());
             var inv = jdbc.queryForList(
                     "SELECT * FROM invitation WHERE participation_id=? AND status='PENDING' ORDER BY id DESC LIMIT 1",
                     m.get("id"));
             if (!inv.isEmpty()) {
                 out.put("invitation_id", inv.get(0).get("id"));
-                out.put("invitation_expires_at", asLocalDateTime(inv.get(0).get("expires_at")).toString());
+                // 邀请截止是 UTC 墙钟入库，转回上海墙钟再返回，否则详情页显示的
+                // 邀请截止会比「我的活动」（Jackson 渲染）早 8 小时、两处打架。
+                out.put("invitation_expires_at", utcWallToShanghai(asLocalDateTime(inv.get(0).get("expires_at"))).toString());
             }
             // 候补排名：排队中按 queued_at, id 排序
             if ("WAITING".equals(m.get("status"))) {

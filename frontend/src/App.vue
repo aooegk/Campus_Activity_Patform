@@ -155,7 +155,12 @@ function fmt(s) {
 async function login() {
   try {
     const j = await api('/api/login', 'POST', { account: account.value, password: password.value })
-    token.value = j.token; localStorage.setItem('token', j.token); user.value = j.user; msg.value = '登录成功'; loadHall()
+    token.value = j.token; localStorage.setItem('token', j.token); user.value = j.user; msg.value = '登录成功'
+    // 任务 3（换号串号）：先清掉上一个账号的缓存状态，再拉当前账号的；
+    // 只拉大厅不够——顶栏未读数常驻显示，通知必须登录时就重拉，否则
+    // 停在通知页换号会直接亮出上一个人的列表。
+    clearAccountState(); loadHall(); loadNotif()
+    if (view.value === 'my') { loadMy(); loadOrganized() }
   } catch (e) { msg.value = e.message }
 }
 async function quick(a) { account.value = a; password.value = '123456'; await login() }
@@ -166,7 +171,11 @@ async function register() {
   } catch (e) { msg.value = e.message }
 }
 async function resignup(aid) { try { await api('/api/activities/' + aid + '/signup', 'POST'); msg.value = '已重新报名'; loadMy() } catch (e) { msg.value = e.message } }
-function logout() { token.value = ''; localStorage.removeItem('token'); user.value = null; detail.value = null }
+// 任务 3（换号串号）：按账号缓存的前端状态集中清理——通知列表、
+// 未读数、我的活动（我报名的 + 我组织的）、详情页（含 my_status /
+// 组织者名单，均属当前账号视角）。登录成功后、退出时、token 失效时都走这里。
+function clearAccountState() { mine.value = []; organized.value = []; notifs.value = []; unread.value = 0; detail.value = null }
+function logout() { token.value = ''; localStorage.removeItem('token'); user.value = null; clearAccountState(); view.value = 'hall' }
 async function loadHall() {
   try {
     const params = new URLSearchParams()
@@ -214,6 +223,8 @@ async function resetDemo() { if (!confirm('确认恢复演示数据吗？当前�
 function go(v) { view.value = v; if (v === 'my') { loadMy(); loadOrganized() } if (v === 'notif') loadNotif(); if (v === 'hall') loadHall() }
 onMounted(async () => {
   loadHall()
-  if (token.value) { try { const j = await api('/api/me'); user.value = j.user } catch { logout() } }
+  // 任务 3：刷新页面带 token 恢复登录时，未读数也要立即是当前账号的，
+  // 不能等到手动点「通知」才刷。
+  if (token.value) { try { const j = await api('/api/me'); user.value = j.user; loadNotif() } catch { logout() } }
 })
 </script>
