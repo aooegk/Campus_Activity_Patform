@@ -67,8 +67,8 @@ http://127.0.0.1:8081；抽签结果见 `runs/<日期>/ab-assignment.md`）、
 
 ## 3. 产品经理汇总（串行，1 个子代理）
 
-开工前先读 TEAM.md「能力配置」里林晚的三个 skill
-（meeting-follow-up、documents、teamwork_delivery_guard），再读
+开工前先读 TEAM.md「能力配置」里林晚的四个 skill
+（meeting-follow-up、documents、teamwork_delivery_guard、planning-task-breakdown），再读
 6 份用户报告，按 TEAM.md 的林晚人设去重、归因、定优先级，
 写 `runs/YYYY-MM-DD/digest.md`（含当日最多 3 项开发任务 +「待用户定」区，
 数据库结构类建议只放待用户定区）。用户 2026-11-06 已授权协调人决定
@@ -81,9 +81,11 @@ http://127.0.0.1:8081；抽签结果见 `runs/<日期>/ab-assignment.md`）、
 
 ## 4. 开发优化（串行：后端 + 前端各 1 个子代理，最后测试 1 个）
 
-开工前各先读自己的 skill：沈默读 campus-buddy-backend，苏晴读
-claude-rea-design + MOBILE.md，陈诺读 campus-buddy-qa（路径见
-TEAM.md「能力配置」）。
+开工前各先读自己的 skill：沈默读 campus-buddy-backend、
+superpowers-systematic-debugging、superpowers-test-driven-development，
+苏晴读 claude-rea-design + MOBILE.md、antfu-vue、vue-debug，陈诺读
+campus-buddy-qa、superpowers-verification-before-completion、webapp-testing
+（路径见 TEAM.md「能力配置」）。
 
 - 后端（沈默）、前端（苏晴）按 digest 的任务改代码，改动记入
   `runs/YYYY-MM-DD/changes.md`（改了什么、为什么、证据）。
