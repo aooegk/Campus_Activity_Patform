@@ -211,11 +211,11 @@ public class ApiController {
             throw new IllegalStateException("参与条件不能超过 500 字");
         LocalDateTime deadline, start, end;
         try {
-            // 前端 datetime-local 发来的是上海墙钟；库里存 UTC 墙钟（见
-            // BuddyService 时间约定），入库前先换算，否则 API 返回会整体晚 8 小时。
-            deadline = BuddyService.shanghaiToUtcWall(LocalDateTime.parse((String) body.get("deadline")));
-            start = BuddyService.shanghaiToUtcWall(LocalDateTime.parse((String) body.get("start_time")));
-            end = BuddyService.shanghaiToUtcWall(LocalDateTime.parse((String) body.get("end_time")));
+            // 前端 datetime-local 发来东八区墙钟，库里直接存东八区墙钟，
+            // 不做任何时区转换（2026-11-06 时区统一改造，旧 shanghaiToUtcWall 已删除）。
+            deadline = LocalDateTime.parse((String) body.get("deadline"));
+            start = LocalDateTime.parse((String) body.get("start_time"));
+            end = LocalDateTime.parse((String) body.get("end_time"));
         } catch (Exception e) {
             throw new IllegalStateException("时间格式不正确");
         }

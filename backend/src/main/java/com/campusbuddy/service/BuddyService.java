@@ -7,8 +7,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
@@ -43,32 +41,22 @@ public class BuddyService {
 
     public int inviteTtlSeconds() { return inviteTtlSeconds; }
 
-    /** 全站时间约定（2026-11-06 任务 1/2 根因，见当日 changes.md）：
-     *  库里 TIMESTAMP 列存的是 UTC 墙钟时间：JVM 默认时区 UTC、PG now() UTC、
-     *  Java LocalDateTime.now() 取 UTC 墙钟，三者一致；Jackson 按
-     *  spring.jackson.time-zone=Asia/Shanghai 把存入的时刻渲染成 +08:00，
-     *  前端直接显示即为用户填的本地时间。
-     *  唯一的例外是发布入口：前端 datetime-local 发来的是上海墙钟，
-     *  必须先转成 UTC 墙钟再入库；反过来，拼给用户看的文案要把 UTC 墙钟
-     *  转回上海墙钟再格式化。不要改 JVM 时区或 Jackson 配置——那会
-     *  打破 PG now() 生成的 created_at 等字段的既有换算。 */
-    public static final ZoneId SHANGHAI = ZoneId.of("Asia/Shanghai");
+    /** 全站时间约定（2026-11-06 时区统一改造：全系统东八区直通）：
+     *  所有时间字段均为东八区（Asia/Shanghai）墙钟，直接存取，不做任何时区转换。
+     *  JVM 以 -Duser.timezone=Asia/Shanghai 启动，LocalDateTime.now() 即东八区墙钟；
+     *  数据库服务器时区同样为 Asia/Shanghai，SQL now()/NOW() 默认值与 Java 写入一致。
+     *  Timestamp.valueOf / asLocalDateTime 只按 JVM 默认时区在墙钟与毫秒之间换算，
+     *  不改变时刻值。Jackson 仍配 spring.jackson.time-zone=Asia/Shanghai：
+     *  PostgreSQL 驱动把 TIMESTAMP 列返回为 Timestamp（Date 子类），Jackson 按该
+     *  时区序列化才是墙钟原值；MySQL 驱动返回 LocalDateTime，按原值序列化。 */
     private static final DateTimeFormatter MINUTE_FMT =
             DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
-    /** 上海墙钟 → UTC 墙钟（入库用）。 */
-    public static LocalDateTime shanghaiToUtcWall(LocalDateTime shanghaiWall) {
-        return shanghaiWall.atZone(SHANGHAI).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
-    }
-
-    /** UTC 墙钟 → 上海墙钟（展示用）。 */
-    public static LocalDateTime utcWallToShanghai(LocalDateTime utcWall) {
-        return utcWall.atZone(ZoneOffset.UTC).withZoneSameInstant(SHANGHAI).toLocalDateTime();
-    }
-
-    /** UTC 墙钟 → 上海墙钟 "yyyy-MM-dd HH:mm"（通知文案用，无 T、无纳秒）。 */
-    public static String fmtShanghaiMinute(LocalDateTime utcWall) {
-        return utcWallToShanghai(utcWall).format(MINUTE_FMT);
+    /** 东八区墙钟 → "yyyy-MM-dd HH:mm"（通知文案用，无 T、无纳秒）。
+     *  直通格式化：入参已是东八区墙钟，不做任何时区转换（2026-11-06 时区统一改造，
+     *  旧实现经 utcWallToShanghai 换算已删除）。 */
+    public static String fmtShanghaiMinute(LocalDateTime wall) {
+        return wall.format(MINUTE_FMT);
     }
 
     private static Timestamp ts(LocalDateTime t) { return Timestamp.valueOf(t); }
@@ -76,7 +64,9 @@ public class BuddyService {
     /** 数据库时间列转 LocalDateTime：MySQL 驱动把 DATETIME/TIMESTAMP 列返回为
      *  LocalDateTime，PostgreSQL 驱动返回为 Timestamp；两者都归一化，避免
      *  (Timestamp) 强转在 MySQL 上抛 ClassCastException。
-     *  同时统一 toString() 的输出格式（ISO），两库返回的 JSON 时间格式一致。 */
+     *  同时统一 toString() 的输出格式（ISO），两库返回的 JSON 时间格式一致。
+     *  只做类型归一化，不做时区转换：Timestamp 按 JVM 默认时区（东八区）解读，
+     *  得到的即库里存的东八区墙钟原值。 */
     private static LocalDateTime asLocalDateTime(Object v) {
         if (v instanceof LocalDateTime ldt) return ldt;
         if (v instanceof Timestamp t) return t.toLocalDateTime();
@@ -319,15 +309,14 @@ public class BuddyService {
             var m = mine.get(0);
             out.put("my_status", m.get("status"));
             out.put("participation_id", m.get("id"));
-            out.put("my_queued_at", m.get("queued_at") == null ? null : utcWallToShanghai(asLocalDateTime(m.get("queued_at"))).toString());
+            out.put("my_queued_at", m.get("queued_at") == null ? null : asLocalDateTime(m.get("queued_at")).toString());
             var inv = jdbc.queryForList(
                     "SELECT * FROM invitation WHERE participation_id=? AND status='PENDING' ORDER BY id DESC LIMIT 1",
                     m.get("id"));
             if (!inv.isEmpty()) {
                 out.put("invitation_id", inv.get(0).get("id"));
-                // 邀请截止是 UTC 墙钟入库，转回上海墙钟再返回，否则详情页显示的
-                // 邀请截止会比「我的活动」（Jackson 渲染）早 8 小时、两处打架。
-                out.put("invitation_expires_at", utcWallToShanghai(asLocalDateTime(inv.get(0).get("expires_at"))).toString());
+                // 库里存的就是东八区墙钟，直接返回，不再换算。
+                out.put("invitation_expires_at", asLocalDateTime(inv.get(0).get("expires_at")).toString());
             }
             // 候补排名：排队中按 queued_at, id 排序
             if ("WAITING".equals(m.get("status"))) {

@@ -14,16 +14,23 @@
    `~/workspace/.portable/pgsql` 到 `/tmp/pgsql` 并 `chmod -R a+rX` →
    `LD_LIBRARY_PATH=/tmp/pgsql/usr/lib/x86_64-linux-gnu:/tmp/pgsql/usr/lib/postgresql/16/lib`
    下用 pgdemo 身份 initdb（`/tmp/pgdata2`，UTF8，C.utf8）→ postgresql.conf
-   追加 port=5433、listen 127.0.0.1、socket /tmp/pgrun → pg_ctl 启动 →
+   追加 port=5433、listen 127.0.0.1、socket /tmp/pgrun、**timezone='Asia/Shanghai'**
+   （时区统一，2026-11-06 起必带；漏了它 PG `now()` 产 UTC 墙钟，
+   `reserved_count` 与 `created_at` 默认值全错 8 小时）→ pg_ctl 启动 →
    建 postgres 超级用户 → createdb campus_buddy → 从
    `~/workspace/campus-buddy/database/backup-2026-11-04.sql` 恢复 →
-   核对计数 21/3/11。
+   核对计数 21/3/11。重建后验时区：`SHOW timezone;` 应为 Asia/Shanghai，
+   `SELECT now();` 应带 `+08`；系统时区也应为 Asia/Shanghai
+   （`/etc/localtime` → Asia/Shanghai，`date` 应显示 CST）。
 3. 启动 A 版后端：`DB_URL=jdbc:postgresql://127.0.0.1:5433/campus_buddy
    DB_USER=postgres INVITE_TTL=120 SWEEP_SECONDS=10 PORT=8080`，
    `~/workspace/.portable/jdk-17.0.21+9/bin/java -Dfile.encoding=UTF-8
-   -Djava.net.preferIPv4Stack=true -jar
+   -Djava.net.preferIPv4Stack=true -Duser.timezone=Asia/Shanghai -jar
    ~/workspace/campus-buddy/backend/target/campus-buddy-1.0.0.jar`，
-   再验健康。启动约需 14–16 秒，健康检查至少等 20 秒。
+   再验健康。启动约需 14–16 秒，健康检查至少等 20 秒。**JVM 时区参数
+   `-Duser.timezone=Asia/Shanghai` 必带（时区统一，2026-11-06 起）；漏了它
+   `LocalDateTime.now()` 产 UTC 墙钟，活动时间整体晚 8 小时（2026-11-06 P0
+   的根因）。**B 版同理（8081，见 DUAL-DB.md，启动前先轮换 cb_app 密码）。
 4. **A/B 抽签（每天一次，步骤 1 之前做）**：抛一次硬币决定当天 6 名
    用户测 A 还是 B（按天随机，不按人随机）。结果与种子记入
    `runs/<日期>/ab-assignment.md` 与当日 digest。抽中 B 时：先确认
@@ -32,7 +39,11 @@
    `~/workspace/.portable/mysql-data` 还在，原地启动即可）；再按
    DUAL-DB.md 先轮换 cb_app 密码再启动 B 版应用实例（8081，密码不存文件、
    每次启动现生成，见 DUAL-DB.md“启动 B 版”）。
-   MySQL 没就绪时，循环照常只跑 PostgreSQL 并在报告里注明。
+   MySQL 没就绪时，循环照常只跑 PostgreSQL 并在报告里注明。MySQL 时区
+   由 `~/workspace/.portable/mysql-8.0.28/my.cnf` 里的
+   `default-time-zone=+08:00` 固定（不要写成 `time_zone=`，mysqld 会报
+   unknown variable 而启动失败）；验活时顺带查
+   `SELECT @@global.time_zone, NOW();` 应为 `+08:00`。
    **停应用时按端口逐个 kill（见 DUAL-DB.md）；`kill_backend.py`
    会杀掉所有 campus-buddy 的 Java 进程，双实例运行时绝不能用。**
 
@@ -70,8 +81,11 @@ http://127.0.0.1:8081；抽签结果见 `runs/<日期>/ab-assignment.md`）、
 开工前先读 TEAM.md「能力配置」里林晚的四个 skill
 （meeting-follow-up、documents、teamwork_delivery_guard、planning-task-breakdown），再读
 6 份用户报告，按 TEAM.md 的林晚人设去重、归因、定优先级，
-写 `runs/YYYY-MM-DD/digest.md`（含当日最多 3 项开发任务 +「待用户定」区，
-数据库结构类建议只放待用户定区）。用户 2026-11-06 已授权协调人决定
+写 `runs/YYYY-MM-DD/digest.md`（含当日全部开发任务 +「待用户定」区）。
+用户长期规则（2026-11-06）：**反馈里需要修的，当天全部修完，不设数量
+上限、不推到明天**（取消原来“每天最多 3 项小改动”的上限）。只有三类
+不进当日任务——新功能、需要改 SRS/SDD 文档的需求变更、与 REQUIREMENTS.md
+硬约束冲突的事项——注明依据放「待用户定」区。用户 2026-11-06 已授权协调人决定
 开放问题（见 DECISIONS.md）：有决定记录的待用户定事项可排入当日任务；
 无决定记录的仍只放待用户定区，不擅自实施。**排任务前必读 REQUIREMENTS.md
 （SRS v1.4 与 SDD v1.0 的硬约束：类别固定、组织者须自行报名、详情页不含
@@ -87,8 +101,11 @@ superpowers-systematic-debugging、superpowers-test-driven-development，
 campus-buddy-qa、superpowers-verification-before-completion、webapp-testing
 （路径见 TEAM.md「能力配置」）。
 
-- 后端（沈默）、前端（苏晴）按 digest 的任务改代码，改动记入
-  `runs/YYYY-MM-DD/changes.md`（改了什么、为什么、证据）。
+- 后端（沈默）、前端（苏晴）按 digest 的任务改代码。**先复现后修复**：
+  每个任务动手前先复现问题（写失败测试，或跑一段复现脚本，或留复现
+  步骤 + 截图/日志），复现成功再修；修完跑复现验证通过才算做完；
+  复现不出来的先写明复现尝试与结论，不凭猜测改代码。改动记入
+  `runs/YYYY-MM-DD/changes.md`（复现方法、根因、改了什么、证据）。
 - 测试（陈诺）独立复核：后端测试在两个库上都跑（A 版 8080、B 版 8081，
   各 46/46；测试参数 INVITE_TTL=10 SWEEP_SECONDS=2，BASE_URL 换端口）、
   移动端测试 16/16（只跑当天抽中的版本）、数据库不变量复核（容量、
@@ -109,8 +126,26 @@ campus-buddy-qa、superpowers-verification-before-completion、webapp-testing
    没改什么及原因、明日关注点）。
 3. 把摘要发到用户所在的 side chat（本对话），完整报告留档，不贴长文。
 
-## 6. 失败处理
+## 6. 同步 GitHub（每次自动推）
+
+用户长期规则（2026-11-06）：每日循环与任何一批代码改动做完后不用问，
+直接推 GitHub（lemonwater379/campus-buddy，main）。步骤：
+
+1. 列出当日改动的文件（代码、测试、TEAM.md、RUNBOOK.md、DECISIONS.md、
+   REQUIREMENTS.md、DUAL-DB.md、new-user-angles.md 等 UTF-8 文本）；
+   不推 runs/ 报告与截图、日志、jar、二进制、截图、node_modules、target/、
+   static 构建产物。清单写到 `runs/<日期>/` 外的临时文件（NUL 分隔）。
+2. 按 `/opt/hatch/connectors/github/references/snapshot-push.md` 走：
+   先用 `list_commits` 核对远端 main 的 head 与同步记录
+   `~/workspace/campus-buddy.muse-github-snapshot-sync.json` 最新一条一致，
+   再 `github push-files`，成功后把新提交 SHA 与清单追加进同步记录
+   （先写 `.tmp-*` 再原子替换），最后再查一次 head 确认。
+3. GitHub 写操作每次仍会弹出一次审批卡（安全规则，绕不过），由用户点
+   一下确认；用户不在或超时未点，推送记为待推、不阻塞当日交付，
+   下次运行重推。不要因为等审批而拖延报告交付。
+
+## 7. 失败处理
 
 - 环境重建失败：不硬跑用户体验，先修环境，当日只交付失败说明。
 - 某用户代理失败：其余继续，digest 注明缺失的一份，不编造。
-- 开发改动导致测试变红：回滚改动，changes.md 如实记，次日再议。
+- 开发改动导致测试变红：回滚改动，当日重修；重修仍不通过才记入明日队列并说明原因，changes.md 如实记。

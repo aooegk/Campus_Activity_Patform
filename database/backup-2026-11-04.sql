@@ -1,3 +1,4 @@
+-- 东八区口径，2026-11-06 迁移
 --
 -- PostgreSQL database dump
 --
@@ -40,12 +41,12 @@ CREATE TABLE public.activity (
     created_at timestamp without time zone DEFAULT now() NOT NULL,
     updated_at timestamp without time zone DEFAULT now() NOT NULL,
     CONSTRAINT activity_capacity_check CHECK (((capacity >= 1) AND (capacity <= 100))),
-    CONSTRAINT activity_category_check CHECK (((category)::text = ANY ((ARRAY['羽毛球'::character varying, '桌游'::character varying, '学习组'::character varying, '其他'::character varying])::text[]))),
+    CONSTRAINT activity_category_check CHECK (((category)::text = ANY (ARRAY[('羽毛球'::character varying)::text, ('桌游'::character varying)::text, ('学习组'::character varying)::text, ('其他'::character varying)::text]))),
     CONSTRAINT activity_check CHECK (((deadline <= start_time) AND (start_time < end_time))),
     CONSTRAINT activity_conditions_check CHECK ((char_length((conditions)::text) <= 500)),
     CONSTRAINT activity_description_check CHECK ((char_length(description) <= 2000)),
     CONSTRAINT activity_location_check CHECK (((char_length((location)::text) >= 1) AND (char_length((location)::text) <= 100))),
-    CONSTRAINT activity_status_check CHECK (((status)::text = ANY ((ARRAY['OPEN'::character varying, 'READY'::character varying, 'RUNNING'::character varying, 'ENDED'::character varying, 'CANCELLED'::character varying])::text[]))),
+    CONSTRAINT activity_status_check CHECK (((status)::text = ANY (ARRAY[('OPEN'::character varying)::text, ('READY'::character varying)::text, ('RUNNING'::character varying)::text, ('ENDED'::character varying)::text, ('CANCELLED'::character varying)::text]))),
     CONSTRAINT activity_title_check CHECK (((char_length((title)::text) >= 1) AND (char_length((title)::text) <= 50)))
 );
 
@@ -88,8 +89,8 @@ CREATE TABLE public.app_user (
     created_at timestamp without time zone DEFAULT now() NOT NULL,
     CONSTRAINT app_user_account_check CHECK (((char_length((account)::text) >= 4) AND (char_length((account)::text) <= 32))),
     CONSTRAINT app_user_nickname_check CHECK (((char_length((nickname)::text) >= 1) AND (char_length((nickname)::text) <= 30))),
-    CONSTRAINT app_user_role_check CHECK (((role)::text = ANY ((ARRAY['USER'::character varying, 'ADMIN'::character varying])::text[]))),
-    CONSTRAINT app_user_status_check CHECK (((status)::text = ANY ((ARRAY['ACTIVE'::character varying, 'DISABLED'::character varying])::text[])))
+    CONSTRAINT app_user_role_check CHECK (((role)::text = ANY (ARRAY[('USER'::character varying)::text, ('ADMIN'::character varying)::text]))),
+    CONSTRAINT app_user_status_check CHECK (((status)::text = ANY (ARRAY[('ACTIVE'::character varying)::text, ('DISABLED'::character varying)::text])))
 );
 
 
@@ -167,7 +168,7 @@ CREATE TABLE public.invitation (
     responded_at timestamp without time zone,
     event_key character varying(100) NOT NULL,
     CONSTRAINT invitation_check CHECK ((issued_at < expires_at)),
-    CONSTRAINT invitation_status_check CHECK (((status)::text = ANY ((ARRAY['PENDING'::character varying, 'ACCEPTED'::character varying, 'REJECTED'::character varying, 'EXPIRED'::character varying, 'INVALID'::character varying])::text[])))
+    CONSTRAINT invitation_status_check CHECK (((status)::text = ANY (ARRAY[('PENDING'::character varying)::text, ('ACCEPTED'::character varying)::text, ('REJECTED'::character varying)::text, ('EXPIRED'::character varying)::text, ('INVALID'::character varying)::text])))
 );
 
 
@@ -209,7 +210,7 @@ CREATE TABLE public.notification (
     read_at timestamp without time zone,
     created_at timestamp without time zone DEFAULT now() NOT NULL,
     CONSTRAINT notification_content_check CHECK ((char_length(content) <= 1000)),
-    CONSTRAINT notification_type_check CHECK (((type)::text = ANY ((ARRAY['报名'::character varying, '候补'::character varying, '邀请'::character varying, '变更'::character varying])::text[])))
+    CONSTRAINT notification_type_check CHECK (((type)::text = ANY (ARRAY[('报名'::character varying)::text, ('候补'::character varying)::text, ('邀请'::character varying)::text, ('变更'::character varying)::text])))
 );
 
 
@@ -248,7 +249,7 @@ CREATE TABLE public.participation (
     queued_at timestamp without time zone,
     joined_at timestamp without time zone,
     updated_at timestamp without time zone DEFAULT now() NOT NULL,
-    CONSTRAINT participation_status_check CHECK (((status)::text = ANY ((ARRAY['FORMAL'::character varying, 'WAITING'::character varying, 'INVITED'::character varying, 'WITHDRAWN'::character varying, 'EXPIRED'::character varying, 'CANCELLED'::character varying])::text[])))
+    CONSTRAINT participation_status_check CHECK (((status)::text = ANY (ARRAY[('FORMAL'::character varying)::text, ('WAITING'::character varying)::text, ('INVITED'::character varying)::text, ('WITHDRAWN'::character varying)::text, ('EXPIRED'::character varying)::text, ('CANCELLED'::character varying)::text])))
 );
 
 
@@ -322,9 +323,9 @@ ALTER TABLE ONLY public.participation ALTER COLUMN id SET DEFAULT nextval('publi
 --
 
 COPY public.activity (id, organizer_id, title, category, description, conditions, location, capacity, deadline, start_time, end_time, status, created_at, updated_at) FROM stdin;
-1	1	周六羽毛球双打	羽毛球	演示活动	请准时参加	体育馆三楼	4	2026-11-06 17:09:12.336937	2026-11-07 17:09:12.336937	2026-11-07 19:09:12.336937	OPEN	2026-11-04 17:09:12.337632	2026-11-04 17:09:12.337632
-2	1	桌游之夜	桌游	演示活动	请准时参加	活动中心201	4	2026-11-06 17:09:12.336937	2026-11-07 17:09:12.336937	2026-11-07 19:09:12.336937	OPEN	2026-11-04 17:09:12.339019	2026-11-04 17:09:12.339019
-3	1	周末学习组	学习组	演示活动	请准时参加	图书馆三楼	10	2026-11-06 17:09:12.336937	2026-11-07 17:09:12.336937	2026-11-07 19:09:12.336937	OPEN	2026-11-04 17:09:12.339985	2026-11-04 17:09:12.339985
+1	1	周六羽毛球双打	羽毛球	演示活动	请准时参加	体育馆三楼	4	2026-11-07 01:09:12.336937	2026-11-08 01:09:12.336937	2026-11-08 03:09:12.336937	OPEN	2026-11-05 01:09:12.337632	2026-11-05 01:09:12.337632
+2	1	桌游之夜	桌游	演示活动	请准时参加	活动中心201	4	2026-11-07 01:09:12.336937	2026-11-08 01:09:12.336937	2026-11-08 03:09:12.336937	OPEN	2026-11-05 01:09:12.339019	2026-11-05 01:09:12.339019
+3	1	周末学习组	学习组	演示活动	请准时参加	图书馆三楼	10	2026-11-07 01:09:12.336937	2026-11-08 01:09:12.336937	2026-11-08 03:09:12.336937	OPEN	2026-11-05 01:09:12.339985	2026-11-05 01:09:12.339985
 \.
 
 
@@ -333,27 +334,27 @@ COPY public.activity (id, organizer_id, title, category, description, conditions
 --
 
 COPY public.app_user (id, account, password_hash, nickname, contact, role, status, created_at) FROM stdin;
-1	organizer	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	组织者小陈		USER	ACTIVE	2026-11-04 17:09:12.325273
-2	demo01	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学1		USER	ACTIVE	2026-11-04 17:09:12.327632
-3	demo02	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学2		USER	ACTIVE	2026-11-04 17:09:12.328293
-4	demo03	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学3		USER	ACTIVE	2026-11-04 17:09:12.328739
-5	demo04	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学4		USER	ACTIVE	2026-11-04 17:09:12.329671
-6	demo05	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学5		USER	ACTIVE	2026-11-04 17:09:12.330362
-7	demo06	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学6		USER	ACTIVE	2026-11-04 17:09:12.330802
-8	demo07	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学7		USER	ACTIVE	2026-11-04 17:09:12.331101
-9	demo08	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学8		USER	ACTIVE	2026-11-04 17:09:12.331483
-10	demo09	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学9		USER	ACTIVE	2026-11-04 17:09:12.332001
-11	demo10	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学10		USER	ACTIVE	2026-11-04 17:09:12.332413
-12	demo11	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学11		USER	ACTIVE	2026-11-04 17:09:12.332954
-13	demo12	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学12		USER	ACTIVE	2026-11-04 17:09:12.333534
-14	demo13	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学13		USER	ACTIVE	2026-11-04 17:09:12.333854
-15	demo14	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学14		USER	ACTIVE	2026-11-04 17:09:12.334135
-16	demo15	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学15		USER	ACTIVE	2026-11-04 17:09:12.334438
-17	demo16	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学16		USER	ACTIVE	2026-11-04 17:09:12.334826
-18	demo17	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学17		USER	ACTIVE	2026-11-04 17:09:12.335233
-19	demo18	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学18		USER	ACTIVE	2026-11-04 17:09:12.335624
-20	demo19	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学19		USER	ACTIVE	2026-11-04 17:09:12.335907
-21	demo20	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学20		USER	ACTIVE	2026-11-04 17:09:12.336177
+1	organizer	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	组织者小陈		USER	ACTIVE	2026-11-05 01:09:12.325273
+2	demo01	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学1		USER	ACTIVE	2026-11-05 01:09:12.327632
+3	demo02	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学2		USER	ACTIVE	2026-11-05 01:09:12.328293
+4	demo03	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学3		USER	ACTIVE	2026-11-05 01:09:12.328739
+5	demo04	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学4		USER	ACTIVE	2026-11-05 01:09:12.329671
+6	demo05	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学5		USER	ACTIVE	2026-11-05 01:09:12.330362
+7	demo06	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学6		USER	ACTIVE	2026-11-05 01:09:12.330802
+8	demo07	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学7		USER	ACTIVE	2026-11-05 01:09:12.331101
+9	demo08	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学8		USER	ACTIVE	2026-11-05 01:09:12.331483
+10	demo09	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学9		USER	ACTIVE	2026-11-05 01:09:12.332001
+11	demo10	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学10		USER	ACTIVE	2026-11-05 01:09:12.332413
+12	demo11	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学11		USER	ACTIVE	2026-11-05 01:09:12.332954
+13	demo12	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学12		USER	ACTIVE	2026-11-05 01:09:12.333534
+14	demo13	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学13		USER	ACTIVE	2026-11-05 01:09:12.333854
+15	demo14	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学14		USER	ACTIVE	2026-11-05 01:09:12.334135
+16	demo15	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学15		USER	ACTIVE	2026-11-05 01:09:12.334438
+17	demo16	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学16		USER	ACTIVE	2026-11-05 01:09:12.334826
+18	demo17	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学17		USER	ACTIVE	2026-11-05 01:09:12.335233
+19	demo18	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学18		USER	ACTIVE	2026-11-05 01:09:12.335624
+20	demo19	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学19		USER	ACTIVE	2026-11-05 01:09:12.335907
+21	demo20	3933ecbb9ed4a06e71a7ea6ce6985713:ddab816d9ced9e7f05644875ba6c25bb4aafca1fcd2e0ceaee93f50d57d11689	同学20		USER	ACTIVE	2026-11-05 01:09:12.336177
 \.
 
 
@@ -386,17 +387,17 @@ COPY public.notification (id, user_id, activity_id, invitation_id, type, content
 --
 
 COPY public.participation (id, activity_id, user_id, status, queued_at, joined_at, updated_at) FROM stdin;
-1	1	2	FORMAL	\N	2026-11-04 17:09:12.336937	2026-11-04 17:09:12.336937
-2	1	3	FORMAL	\N	2026-11-04 17:09:12.336937	2026-11-04 17:09:12.336937
-3	1	4	FORMAL	\N	2026-11-04 17:09:12.336937	2026-11-04 17:09:12.336937
-4	2	2	FORMAL	\N	2026-11-04 17:09:12.336937	2026-11-04 17:09:12.336937
-5	2	3	FORMAL	\N	2026-11-04 17:09:12.336937	2026-11-04 17:09:12.336937
-6	2	4	FORMAL	\N	2026-11-04 17:09:12.336937	2026-11-04 17:09:12.336937
-7	2	5	FORMAL	\N	2026-11-04 17:09:12.336937	2026-11-04 17:09:12.336937
-8	2	6	WAITING	2026-11-04 17:14:12.336937	\N	2026-11-04 17:09:12.336937
-9	2	7	WAITING	2026-11-04 17:15:12.336937	\N	2026-11-04 17:09:12.336937
-10	3	2	FORMAL	\N	2026-11-04 17:09:12.336937	2026-11-04 17:09:12.336937
-11	3	3	FORMAL	\N	2026-11-04 17:09:12.336937	2026-11-04 17:09:12.336937
+1	1	2	FORMAL	\N	2026-11-05 01:09:12.336937	2026-11-05 01:09:12.336937
+2	1	3	FORMAL	\N	2026-11-05 01:09:12.336937	2026-11-05 01:09:12.336937
+3	1	4	FORMAL	\N	2026-11-05 01:09:12.336937	2026-11-05 01:09:12.336937
+4	2	2	FORMAL	\N	2026-11-05 01:09:12.336937	2026-11-05 01:09:12.336937
+5	2	3	FORMAL	\N	2026-11-05 01:09:12.336937	2026-11-05 01:09:12.336937
+6	2	4	FORMAL	\N	2026-11-05 01:09:12.336937	2026-11-05 01:09:12.336937
+7	2	5	FORMAL	\N	2026-11-05 01:09:12.336937	2026-11-05 01:09:12.336937
+8	2	6	WAITING	2026-11-05 01:14:12.336937	\N	2026-11-05 01:09:12.336937
+9	2	7	WAITING	2026-11-05 01:15:12.336937	\N	2026-11-05 01:09:12.336937
+10	3	2	FORMAL	\N	2026-11-05 01:09:12.336937	2026-11-05 01:09:12.336937
+11	3	3	FORMAL	\N	2026-11-05 01:09:12.336937	2026-11-05 01:09:12.336937
 \.
 
 

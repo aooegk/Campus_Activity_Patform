@@ -20,6 +20,57 @@
 | 数据库日志 | ~/workspace/backend.log | ~/workspace/backend-mysql.log |
 | 快照 | runs/&lt;日期&gt;/db-before.sql（pg_dump） | runs/&lt;日期&gt;/db-before-mysql.sql（mysqldump） |
 
+## 时区（全部东八区，2026-11-06 统一）
+
+- **口径**：系统、JVM、PostgreSQL、MySQL、应用内所有时间处理与展示，全部按
+  Asia/Shanghai（UTC+8）。时间字段直接存东八区墙钟，不再混用 UTC。代码里已
+  删除全部 UTC↔上海转换（`shanghaiToUtcWall()`、`utcWallToShanghai()`、
+  `fmtShanghaiMinute()` 的转换分支）；发布入口直接存前端发来的墙钟，显示直
+  接用库里值。`application.properties` 保留
+  `spring.jackson.time-zone=Asia/Shanghai`。此口径与 SDD §2.2（"存储采用
+  UTC 语义，界面以 Asia/Shanghai 显示"）冲突，以用户指令为准，SDD 该条作废。
+- **各处设置**：
+  - 系统：`/etc/localtime` → Asia/Shanghai，`/etc/timezone` = Asia/Shanghai。
+  - JVM：两个实例启动参数都加 `-Duser.timezone=Asia/Shanghai`
+    （`LocalDateTime.now()` 即东八区墙钟；见下"应用实例"）。
+  - PostgreSQL：`postgresql.conf` 加 `timezone='Asia/Shanghai'`
+    （虚拟机替换后重建时也要带上，见 RUNBOOK 第 0 步）。验证：
+    `SHOW timezone;` → Asia/Shanghai，`SELECT now();` → `+08`。
+  - MySQL：`my.cnf` 写 `default-time-zone=+08:00`。**注意：`time_zone=+08:00`
+    不是合法配置项，mysqld 会报 unknown variable 而启动失败。**验证：
+    `SELECT @@global.time_zone, @@session.time_zone, NOW();` → `+08:00`。
+  - JDBC：MySQL 的 URL 带 `serverTimezone=Asia/Shanghai`（见对照表）。
+- **数据迁移**：2026-11-06 双库 15 列全部 +8 小时（PG `INTERVAL '8 hours'`，
+  MySQL `INTERVAL 8 HOUR`），行数不变；种子备份
+  `database/backup-2026-11-04.sql` 已从迁移后 PG 库重新生成（文件头注明
+  "东八区口径，2026-11-06 迁移"）。完整记录：
+  `runs/2026-11-06/tz-migration.md`。
+- **快照口径警告**：`runs/2026-11-06/db-before-tz.sql` /
+  `db-before-tz-mysql.sql` 是**迁移前（UTC 口径）的回滚快照**，只能用于
+  "迁移本身失败时回滚"，绝不能作为日常恢复源——2026-11-06 验证收尾时
+  从它恢复曾把 +8h 迁移 undo（后已重跑迁移并重拍快照）。日常恢复用当日
+  快照（`db-before.sql` / `db-before-mysql.sql`）或迁移后快照
+  `db-after-tz.sql` / `db-after-tz-mysql.sql`。
+- **三处时区不一致会怎样错**（2026-11-06 P0 的根因就是这类错）：
+  - JVM 是 UTC、其余是上海：发布入口把前端发的上海墙钟当 UTC 入库，
+    所有活动时间整体晚 8 小时；`LocalDateTime.now()` 产 UTC 墙钟，
+    邀请过期、截止判断全错 8 小时。
+  - PG 是 UTC、JVM 是上海：`activity.created_at` 等靠 `DEFAULT now()`
+    的列存 UTC 墙钟；`reserved_count` 子查询里的 `expires_at > now()`
+    用 UTC 的 now() 比上海墙钟的 expires_at，预留数最多滞后 8 小时
+    （仅显示，容量强制在 Java 侧，不受影响）。
+  - MySQL 是 UTC、JVM 是上海：`DATETIME DEFAULT NOW()` 的列存 UTC
+    墙钟；JDBC `serverTimezone` 与库时区不一致时驱动可能再换算一次，
+    造成二次偏移。
+- **Render 限制**：Render 的免费 PostgreSQL 时区是 UTC 且不可改；Dockerfile
+  的启动命令已加 `-Duser.timezone=Asia/Shanghai`（JVM 走东八区），但
+  Render 上 PG `now()` 仍产 UTC 墙钟。影响仅限两处，均不碰业务判断：
+  (1) 列表/详情页的 `reserved_count`（`expires_at > now()`）显示最多
+  滞后 8 小时——容量强制、邀请过期、截止判断都在 Java 侧（JVM 东八区），
+  不受影响；(2) 靠 `DEFAULT now()` 填充的 `created_at`/`updated_at`
+  （如 activity 创建时）会是 UTC 墙钟，仅为记录时间。Render 上线前若要
+  消除这两处，可把 SQL 里的 `now()` 换成 Java 传入的当前时间参数。
+
 ## 安装位置
 
 - PostgreSQL：`~/workspace/.portable/pgsql`（程序），数据目录 `/tmp/pgdata2`
@@ -45,8 +96,8 @@
 ```bash
 # PostgreSQL（虚拟机替换后按 RUNBOOK 第 0 步重建；已在跑时跳过）
 # 配方：useradd pgdemo → cp -r ~/.portable/pgsql /tmp/pgsql → initdb /tmp/pgdata2
-# → postgresql.conf 追加 port=5433、listen 127.0.0.1、socket /tmp/pgrun
-# → pg_ctl 启动 → 建 postgres 超级用户 → createdb campus_buddy → 从备份恢复
+# → postgresql.conf 追加 port=5433、listen 127.0.0.1、socket /tmp/pgrun、
+#   timezone='Asia/Shanghai' → pg_ctl 启动 → 建 postgres 超级用户 → createdb campus_buddy → 从备份恢复
 
 # MySQL（已装好时只需启动；虚拟机替换后数据目录还在，原地启动）
 ~/workspace/.portable/mysql-8.0.28/bin/mysqld \
@@ -66,7 +117,7 @@ JAR=~/workspace/campus-buddy/backend/target/campus-buddy-1.0.0.jar
 # A 版（正常参数 INVITE_TTL=120 SWEEP_SECONDS=10）
 DB_URL=jdbc:postgresql://127.0.0.1:5433/campus_buddy DB_USER=postgres \
   INVITE_TTL=120 SWEEP_SECONDS=10 PORT=8080 \
-  $J -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true -jar $JAR \
+  $J -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true -Duser.timezone=Asia/Shanghai -jar $JAR \
   > ~/workspace/backend.log 2>&1 &
 
 # B 版（正常参数；启动前先轮换一次密码，不写文件——2026-11-06 已实测通过）
@@ -78,7 +129,7 @@ DB_URL='jdbc:mysql://127.0.0.1:3306/campus_buddy?useUnicode=true&characterEncodi
   DB_USER=cb_app DB_PASSWORD="$NEWPW" \
   DB_DRIVER=com.mysql.cj.jdbc.Driver DB_SCHEMA=classpath:schema-mysql.sql \
   INVITE_TTL=120 SWEEP_SECONDS=10 PORT=8081 \
-  $J -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true -jar $JAR \
+  $J -Dfile.encoding=UTF-8 -Djava.net.preferIPv4Stack=true -Duser.timezone=Asia/Shanghai -jar $JAR \
   > ~/workspace/backend-mysql.log 2>&1 &
 ```
 

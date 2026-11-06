@@ -29,5 +29,10 @@ WORKDIR /app
 COPY --from=backend-build /build/backend/target/campus-buddy-1.0.0.jar ./app.jar
 # Render 会注入 PORT；数据库连接由环境变量 DB_HOST/DB_PORT/DB_NAME/
 # DB_USER/DB_PASSWORD 提供（见 application.properties，默认值为本地开发值）
+# 时区：JVM 走东八区（-Duser.timezone=Asia/Shanghai，与本地一致）。
+# Render 的免费 PostgreSQL 时区是 UTC 且不可改，应用不依赖 PG now() 做
+# 业务时间判断（容量、邀请过期、截止判断都在 Java 侧），仅 reserved_count
+# 显示与 DEFAULT now() 的 created_at/updated_at 会是 UTC 墙钟（见 DUAL-DB.md
+# “时区”一节的 Render 限制）。
 EXPOSE 8080
-CMD ["java", "-Dfile.encoding=UTF-8", "-Djava.net.preferIPv4Stack=true", "-jar", "app.jar"]
+CMD ["java", "-Dfile.encoding=UTF-8", "-Djava.net.preferIPv4Stack=true", "-Duser.timezone=Asia/Shanghai", "-jar", "app.jar"]
