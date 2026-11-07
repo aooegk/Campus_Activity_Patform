@@ -84,6 +84,26 @@ public class BuddyService {
         jdbc.update(sql, userId, activityId, invitationId, type, content, eventKey);
     }
 
+    /** 组织者通知（任务 2，2026-11-07）：报名 / 进候补 / 退出 / 递补确认时通知组织者。
+     *  SDD §6.8 矩阵：正式报名、退出、递补确认通知本人和组织者；DECISIONS.md 决定 1
+     *  另定进候补也通知组织者。组织者本人操作时不重复发（报名人与组织者同一人时
+     *  只保留本人那条通知）。内容含报名人昵称 + 活动名 + 时间地点（REQUIREMENTS 硬约束 4）。 */
+    private void notifyOrganizer(long organizerId, long actorUserId, long activityId,
+                                 String type, String content, String eventKey) {
+        if (organizerId == actorUserId) return;
+        notify(organizerId, activityId, null, type, content, eventKey);
+    }
+
+    private String nickname(long userId) {
+        return jdbc.queryForObject("SELECT nickname FROM app_user WHERE id=?", String.class, userId);
+    }
+
+    /** 活动时间地点后缀："时间 yyyy-MM-dd HH:mm，地点 xxx"（东八区墙钟直通）。 */
+    private String activityWhenWhere(Map<String, Object> act) {
+        return "时间 " + fmtShanghaiMinute(asLocalDateTime(act.get("start_time")))
+                + "，地点 " + act.get("location");
+    }
+
     private int formalCount(long activityId) {
         return jdbc.queryForObject(
                 "SELECT COUNT(*) FROM participation WHERE activity_id=? AND status='FORMAL'",
@@ -172,12 +192,21 @@ public class BuddyService {
                     status.equals("FORMAL") ? ts(now) : null, ts(now), activityId, userId);
         }
         String title = (String) act.get("title");
+        long organizerId = ((Number) act.get("organizer_id")).longValue();
+        String whenWhere = activityWhenWhere(act);
         if (status.equals("FORMAL")) {
-            notify(userId, activityId, null, "报名", "你已成功报名活动「" + title + "」。",
+            // 报名成功通知内容含活动名称及时间地点（REQUIREMENTS 硬约束 4）。
+            notify(userId, activityId, null, "报名", "你已成功报名活动「" + title + "」，" + whenWhere + "。",
                     "notify:formal:" + activityId + ":" + userId + ":" + now);
+            notifyOrganizer(organizerId, userId, activityId, "报名",
+                    "「" + nickname(userId) + "」已报名活动「" + title + "」，" + whenWhere + "。",
+                    "notify:org:formal:" + activityId + ":" + userId + ":" + now);
         } else {
-            notify(userId, activityId, null, "候补", "活动「" + title + "」已满员，你已进入候补队列。",
+            notify(userId, activityId, null, "候补", "活动「" + title + "」已满员，你已进入候补队列，" + whenWhere + "。",
                     "notify:waiting:" + activityId + ":" + userId + ":" + now);
+            notifyOrganizer(organizerId, userId, activityId, "候补",
+                    "「" + nickname(userId) + "」已进入活动「" + title + "」的候补队列，" + whenWhere + "。",
+                    "notify:org:waiting:" + activityId + ":" + userId + ":" + now);
         }
         return detail(activityId, userId);
     }
@@ -209,9 +238,16 @@ public class BuddyService {
         }
         // 任务 3-2：退出产生一条通知，否则退出前后两条「报名成功」无法分辨。
         // 类型用 '变更'（notification 表 CHECK 只允许 报名/候补/邀请/变更，不改表）。
-        String title = jdbc.queryForObject("SELECT title FROM activity WHERE id=?", String.class, activityId);
+        // 退出通知的「退出」字样由前端按类型映射显示（任务 4 前端部分）。
+        var actW = jdbc.queryForMap(
+                "SELECT organizer_id, title, location, start_time FROM activity WHERE id=?", activityId);
+        String title = (String) actW.get("title");
         notify(userId, activityId, null, "变更", "你已退出活动「" + title + "」。",
                 "notify:withdraw:" + participationId + ":" + now);
+        // 任务 2：退出也通知组织者（SDD §6.8 矩阵；之前只通知本人是漏发）。
+        notifyOrganizer(((Number) actW.get("organizer_id")).longValue(), userId, activityId, "变更",
+                "「" + nickname(userId) + "」已退出活动「" + title + "」，" + activityWhenWhere(actW) + "。",
+                "notify:org:withdraw:" + participationId + ":" + now);
         return detail(activityId, userId);
     }
 
@@ -250,6 +286,15 @@ public class BuddyService {
             if (changed != 1) throw new IllegalStateException("邀请已被另一方处理");
             jdbc.update("UPDATE participation SET status='FORMAL', joined_at=?, updated_at=? WHERE id=?",
                     ts(now), ts(now), part.get("id"));
+            // 任务 4：接受递补邀请后，原邀请通知标已读（与过期情形 expireOne 一致）。
+            jdbc.update("UPDATE notification SET read_at=? WHERE invitation_id=? AND type='邀请' AND read_at IS NULL",
+                    ts(now), invitationId);
+            // 任务 2：递补确认通知组织者（SDD §6.8 矩阵）。
+            var actA = jdbc.queryForMap(
+                    "SELECT organizer_id, title, location, start_time FROM activity WHERE id=?", activityId);
+            notifyOrganizer(((Number) actA.get("organizer_id")).longValue(), userId, activityId, "报名",
+                    "「" + nickname(userId) + "」已确认参加活动「" + actA.get("title") + "」，" + activityWhenWhere(actA) + "。",
+                    "notify:org:accept:" + invitationId);
         } else {
             jdbc.update("UPDATE invitation SET status='REJECTED', responded_at=? WHERE id=? AND status='PENDING'",
                     ts(now), invitationId);

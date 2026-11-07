@@ -19,7 +19,8 @@
    `reserved_count` 与 `created_at` 默认值全错 8 小时）→ pg_ctl 启动 →
    建 postgres 超级用户 → createdb campus_buddy → 从
    `~/workspace/campus-buddy/database/backup-2026-11-04.sql` 恢复 →
-   核对计数 21/3/11。重建后验时区：`SHOW timezone;` 应为 Asia/Shanghai，
+   核对计数 21/3/10（A 版；2026-11-06 晚用户定种子改动后，demo01 退出
+   周末学习组，活动参与由 11 变 10；B 版仍为 21/3/11）。重建后验时区：`SHOW timezone;` 应为 Asia/Shanghai，
    `SELECT now();` 应带 `+08`；系统时区也应为 Asia/Shanghai
    （`/etc/localtime` → Asia/Shanghai，`date` 应显示 CST）。
 3. 启动 A 版后端：`DB_URL=jdbc:postgresql://127.0.0.1:5433/campus_buddy

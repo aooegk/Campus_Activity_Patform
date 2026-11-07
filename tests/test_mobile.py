@@ -16,6 +16,14 @@ def check(name, ok, detail=""):
 def no_overflow(page):
     return page.evaluate("document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1")
 
+def nav(pg, name):
+    """2026-11-07 任务 19: 窄屏(<=640px)导航收进「☰ 菜单」里, 点导航前先开菜单;
+    宽屏下菜单按钮不可见, 直接点导航。断言不变, 只改到达路径。"""
+    menu = pg.get_by_role("button", name="菜单")
+    if menu.count() and menu.first.is_visible():
+        menu.first.click(); pg.wait_for_timeout(300)
+    pg.get_by_role("button", name=name).click()  # 不用 exact: 通知按钮带未读数后缀, 如「通知（2 未读）」
+
 def run_android(p):
     b = p.chromium.launch()
     ctx = b.new_context(viewport={"width": 412, "height": 915}, is_mobile=True, has_touch=True,
@@ -29,17 +37,17 @@ def run_android(p):
     check("Android: quick login demo01", "同学1" in pg.locator("main").inner_text() or "你好" in pg.content())
     check("Android: no horizontal overflow (hall)", no_overflow(pg))
     pg.screenshot(path=f"{OUT}/mobile-android-hall.png")
-    pg.get_by_role("button", name="查看详情 / 报名").first.click()
+    pg.get_by_role("button", name="查看详情").first.click()
     pg.wait_for_timeout(1200)
     check("Android: detail opens", "详情" in pg.locator("main").inner_text())
     pg.screenshot(path=f"{OUT}/mobile-android-detail.png")
-    pg.get_by_role("button", name="我的活动").click(); pg.wait_for_timeout(1000)
+    nav(pg, "我的活动"); pg.wait_for_timeout(1000)
     check("Android: my activities", "羽毛球" in pg.locator("main").inner_text())
-    pg.get_by_role("button", name="通知").click(); pg.wait_for_timeout(1000)
+    nav(pg, "通知"); pg.wait_for_timeout(1000)
     check("Android: notifications page", True)
     pg.get_by_role("button", name="退出").click(); pg.wait_for_timeout(800)
     pg.get_by_role("button", name="组织者").click(); pg.wait_for_timeout(1200)
-    pg.get_by_role("button", name="发布活动").click(); pg.wait_for_timeout(800)
+    nav(pg, "发布活动"); pg.wait_for_timeout(800)
     pg.locator("input").nth(3).fill("安卓手机测试") if False else None
     # publish form: inputs in order title, location, capacity, deadline, start, end, description, conditions
     inputs = pg.locator("section.card input")
@@ -80,13 +88,16 @@ def run_ios(p):
     check("iOS: quick login demo05", "你好" in pg.content())
     check("iOS: no horizontal overflow (hall)", no_overflow(pg))
     pg.screenshot(path=f"{OUT}/mobile-ios-hall.png")
-    pg.get_by_role("button", name="查看详情 / 报名").first.click()
+    pg.get_by_role("button", name="查看详情").first.click()
     pg.wait_for_timeout(1200)
     check("iOS: detail opens", "详情" in pg.locator("main").inner_text())
     pg.screenshot(path=f"{OUT}/mobile-ios-detail.png")
-    pg.get_by_role("button", name="我的活动").click(); pg.wait_for_timeout(1000)
+    nav(pg, "我的活动"); pg.wait_for_timeout(1000)
+    # 2026-11-07 任务 15: 「我的活动」默认是「已报名」视图; demo05 只有候补记录,
+    # 须先切到「候补」视图再断言(断言本身不变)。
+    pg.get_by_role("button", name="候补", exact=True).click(); pg.wait_for_timeout(800)
     check("iOS: my activities", "桌游" in pg.locator("main").inner_text() or "羽毛球" in pg.locator("main").inner_text())
-    pg.get_by_role("button", name="通知").click(); pg.wait_for_timeout(1000)
+    nav(pg, "通知"); pg.wait_for_timeout(1000)
     check("iOS: notifications page", True)
     b.close()
     return engine
