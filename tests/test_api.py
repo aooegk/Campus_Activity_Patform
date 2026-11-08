@@ -7,6 +7,14 @@
 import concurrent.futures, json, os, sys, time, urllib.request
 
 BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8080") + "/api"
+from datetime import datetime, timedelta
+# 活动时间取相对日期，避免写死日期过期导致创建被拒（2026-11-08 首次过期：截止 11-07 已过）。
+# 形状与旧写死值一致：截止=明天 20:00，开始=后天 20:00，结束=后天 22:00。
+_NOW = datetime.now()
+DEADLINE = (_NOW + timedelta(days=1)).strftime("%Y-%m-%dT20:00:00")
+START = (_NOW + timedelta(days=2)).strftime("%Y-%m-%dT20:00:00")
+END = (_NOW + timedelta(days=2)).strftime("%Y-%m-%dT22:00:00")
+
 results = []
 def check(name, cond, detail=""):
     results.append((name, bool(cond), detail))
@@ -100,7 +108,7 @@ def main():
     newa = req("POST", "/activities", token=org, body={
         "title": "并发测试活动", "category": "其他", "description": "并发测试",
         "conditions": "", "location": "线上", "capacity": 4,
-        "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"})
+        "deadline": DEADLINE, "start_time": START, "end_time": END})
     check("新建并发测试活动", newa.get("ok") is True, str(newa))
     cid = newa["id"]
     with concurrent.futures.ThreadPoolExecutor(max_workers=20) as ex:
@@ -113,7 +121,7 @@ def main():
     newa2 = req("POST", "/activities", token=org, body={
         "title": "重复提交测试", "category": "其他", "description": "重复测试",
         "conditions": "", "location": "线上", "capacity": 10,
-        "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"})
+        "deadline": DEADLINE, "start_time": START, "end_time": END})
     cid2 = newa2["id"]
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
         list(ex.map(lambda _: req("POST", f"/activities/{cid2}/signup", token=toks["demo01"]), range(10)))

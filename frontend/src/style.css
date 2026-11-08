@@ -44,8 +44,50 @@ header nav button {
   border: 1px solid var(--line);
 }
 header nav button.active { background: var(--orange); border-color: var(--orange); color: var(--ink); font-weight: 600; }
+/* 任务 9：完整深色模式。只用 REA v4 深色 token（skill §1.1/§1.4）：
+   画布 S0 #0b0b0b、主画布 S1 #151515、卡片 S2 #1a1a19、浮层 S3 #20201f；
+   正文 #f0efec、次要 #c3c2b7、柔和 #898781；clay #d97757 / #c6613f 不变；
+   边框用白色 9%/18% alpha（v4 §2.1 深色表达式）。卡片圆角仍用既有值，不动。 */
+body.dark {
+  --cream: #0b0b0b;
+  --paper: #1a1a19;
+  --ink: #f0efec;
+  --grey: #c3c2b7;
+  --line: rgba(240, 239, 236, 0.14);
+  --orange: #d97757;
+  --orange-soft: #2c2c2a;
+  --orange-line: rgba(240, 239, 236, 0.18);
+}
+body.dark .badge { background: #2c2c2a; border-color: rgba(240, 239, 236, 0.14); color: #f0efec; }
+body.dark .badge-accent { background: #2c2c2a; border-color: #863311; color: #f4ae94; }
+body.dark button.warn { color: #f0a58c; border-color: rgba(240, 239, 236, 0.18); }
+body.dark .unread { color: #ec835a; }
+body.dark .skeleton-bar { background: #2c2c2a; }
+body.dark input, body.dark select { color-scheme: dark; }
+body.dark header nav button.active, body.dark .tabs button.active { color: #141413; }
 /* 任务 19：窄屏菜单按钮，桌面隐藏 */
 .menu-btn { display: none; }
+/* 任务 9 实测对比度（WCAG，脚本算出，见 changes.md）：正文 #f0efec/#1a1a19 15.15:1、
+   次要 #c3c2b7/#1a1a19 9.72:1、主按钮墨字 #141413/#d97757 5.90:1、
+   满员徽章白字/#863311 8.42:1、退出橙 #ec835a/#1a1a19 6.60:1、badge-accent
+   #f4ae94/#1a1a19 9.40:1、warn #f0a58c/#1a1a19 8.68:1，均 ≥4.5:1。 */
+/* 任务 21：大厅卡片活动编号小字（不喧宾夺主）。 */
+.activity-no { color: var(--grey); font-size: 13px; font-weight: 400; }
+/* 任务 20：移动端常用入口常驻条（桌面隐藏；文案刻意不用「我的活动/发布活动/
+   通知」，避免与顶栏导航同名导致移动端测试的角色定位歧义）。 */
+.quick-nav { display: none; }
+/* 任务 18：提示条关闭按钮。 */
+.msg { position: relative; padding-right: 40px; }
+.msg-close {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  border: 0; background: transparent; font-size: 20px; line-height: 1;
+  padding: 4px 8px; margin: 0; color: var(--grey);
+}
+/* 任务 19：退出提示条更明显——加粗边框 + 左侧深色条 + 更大字号。 */
+.withdraw-notice { border: 2px solid #863311; border-left: 6px solid #863311; font-size: 16px; }
+.withdraw-notice .primary { margin-left: 8px; }
+/* 任务 4：演示模式开关按钮（仅演示模式可见的页脚里）。 */
+.theme-btn { margin-left: auto; }
 header .user-greet { color: var(--grey); font-size: 14px; }
 main { max-width: 980px; margin: 0 auto; padding: 28px 24px 48px; }
 .card {
@@ -185,6 +227,12 @@ section.card label input, section.card label select {
   header h1 { font-size: 22px; }
   /* 任务 19：窄屏导航收进「菜单」，问候语随导航一起收起，顶栏只剩一行 */
   header .menu-btn { display: inline-block; margin: 0 0 0 auto; }
+  /* 任务 20：移动端首屏常用入口常驻（顶栏本身不动，仍只占一行约 72px）。 */
+  .quick-nav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+  .quick-nav button { margin-bottom: 0; }
+  /* 任务 9 + 任务 20：360px 下深色切换只留图标，避免顶栏换行变高。 */
+  .theme-btn .theme-label { display: none; }
+  .theme-btn { padding: 9px 10px; margin-left: 0; }
   header nav { display: none; }
   header nav.open { display: flex; flex-basis: 100%; }
   header nav .user-greet { flex-basis: 100%; }

@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS notification (
     user_id       BIGINT NOT NULL REFERENCES app_user(id),
     activity_id   BIGINT REFERENCES activity(id),
     invitation_id BIGINT REFERENCES invitation(id),
-    type          VARCHAR(10) NOT NULL CHECK (type IN ('报名', '候补', '邀请', '变更')),
+    type          VARCHAR(10) NOT NULL CHECK (type IN ('报名', '候补', '邀请', '变更', '退出')),
     content       TEXT NOT NULL CHECK (char_length(content) <= 1000),
     event_key     VARCHAR(100) NOT NULL,
     read_at       DATETIME,

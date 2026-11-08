@@ -21,6 +21,13 @@ public class SweepService {
     @Scheduled(fixedDelayString = "${app.sweep-seconds:10}000")
     public void sweep() {
         LocalDateTime now = LocalDateTime.now();
+        // 任务 1（2026-11-08 P0）：READY→OPEN 回流。截止未到且未开始的活动回到报名期。
+        // 根因：sweep 只有 OPEN→READY 的单向流转；种子时间平移 / 恢复后截止回到未来，
+        // 状态却留在 READY，报名（要求 OPEN）与递补（promote 第一行要求 OPEN）双死。
+        // 回流与 OPEN→READY 互斥（截止 </> now），先执行回流再执行正向流转，不会互相打架；
+        // READY 且已开始的仍由下面的 RUNNING 流转接走，截止已过的仍留在 READY。
+        jdbc.update("UPDATE activity SET status='OPEN', updated_at=? WHERE status='READY' AND deadline > ? AND start_time > ?",
+                java.sql.Timestamp.valueOf(now), java.sql.Timestamp.valueOf(now), java.sql.Timestamp.valueOf(now));
         // 活动生命周期（不碰已取消）
         jdbc.update("UPDATE activity SET status='ENDED', updated_at=? WHERE status IN ('OPEN','READY','RUNNING') AND end_time <= ?",
                 java.sql.Timestamp.valueOf(now), java.sql.Timestamp.valueOf(now));
@@ -35,5 +42,8 @@ public class SweepService {
         for (Long id : expired) {
             try { buddy.expireOne(id); } catch (Exception e) { /* 下一轮重试 */ }
         }
+        // 任务 8：白天补发夜间暂缓的递补邀请（夜间空缺等白天补发给候补第 1 名）。
+        // backfillDaytimeInvites 内部先判白天，夜间直接返回。
+        try { buddy.backfillDaytimeInvites(now); } catch (Exception e) { /* 下一轮重试 */ }
     }
 }

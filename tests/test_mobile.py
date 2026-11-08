@@ -3,7 +3,15 @@ Runs against http://127.0.0.1:8080. Saves screenshots to screenshots/mobile-*.
 Exit 0 only if every step passes; prints PASS/FAIL per step.
 """
 import os, sys, json, urllib.request
+from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
+
+# 发布表单时间取相对日期，避免写死日期过期导致发布被拒（2026-11-08 首次过期：截止 11-07 已过）。
+# 形状与旧写死值一致：截止=明天 18:00，开始=后天 18:00，结束=后天 20:00。
+_NOW = datetime.now()
+DEADLINE = (_NOW + timedelta(days=1)).strftime("%Y-%m-%dT18:00")
+START = (_NOW + timedelta(days=2)).strftime("%Y-%m-%dT18:00")
+END = (_NOW + timedelta(days=2)).strftime("%Y-%m-%dT20:00")
 
 BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8080")
 OUT = "/home/hatch/workspace/campus-buddy/screenshots"
@@ -54,9 +62,9 @@ def run_android(p):
     inputs.nth(0).fill("安卓手机测试")
     inputs.nth(1).fill("操场")
     inputs.nth(2).fill("4")
-    inputs.nth(3).fill("2026-11-07T18:00")
-    inputs.nth(4).fill("2026-11-08T18:00")
-    inputs.nth(5).fill("2026-11-08T20:00")
+    inputs.nth(3).fill(DEADLINE)
+    inputs.nth(4).fill(START)
+    inputs.nth(5).fill(END)
     inputs.nth(6).fill("手机端发布测试")
     pg.get_by_role("button", name="发布", exact=True).click(); pg.wait_for_timeout(1500)
     check("Android: publish via UI", "安卓手机测试" in pg.locator("main").inner_text())

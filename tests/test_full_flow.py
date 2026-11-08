@@ -6,6 +6,14 @@
 import json, os, sys, time, urllib.request, urllib.error
 
 BASE = os.environ.get("BASE_URL", "http://127.0.0.1:8080") + "/api"
+from datetime import datetime, timedelta
+# 活动时间取相对日期，避免写死日期过期导致创建被拒（2026-11-08 首次过期：截止 11-07 已过）。
+# 形状与旧写死值一致：截止=明天 20:00，开始=后天 20:00，结束=后天 22:00。
+_NOW = datetime.now()
+DEADLINE = (_NOW + timedelta(days=1)).strftime("%Y-%m-%dT20:00:00")
+START = (_NOW + timedelta(days=2)).strftime("%Y-%m-%dT20:00:00")
+END = (_NOW + timedelta(days=2)).strftime("%Y-%m-%dT22:00:00")
+
 results = []
 def check(name, cond, detail=""):
     results.append(bool(cond)); print(("PASS" if cond else "FAIL"), "-", name, detail)
@@ -42,7 +50,7 @@ d1, d2, d3 = login("demo01"), login("demo02"), login("demo03")
 a = req("POST", "/activities", token=org, body={
     "title": "全流程测试：羽毛球", "category": "羽毛球", "description": "端到端测试",
     "conditions": "", "location": "体育馆", "capacity": 2,
-    "deadline": "2026-11-07T20:00:00", "start_time": "2026-11-08T20:00:00", "end_time": "2026-11-08T22:00:00"})
+    "deadline": DEADLINE, "start_time": START, "end_time": END})
 check("组织者发布活动", a.get("ok") is True, str(a)); aid = a["id"]
 
 # 3 报名：2 正式，第 3 人候补

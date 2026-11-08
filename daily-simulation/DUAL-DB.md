@@ -136,7 +136,7 @@ DB_URL='jdbc:mysql://127.0.0.1:3306/campus_buddy?useUnicode=true&characterEncodi
 启动约需 14–16 秒，健康检查至少等 20 秒再验：
 
 ```bash
-curl -s http://127.0.0.1:8080/api/health   # A：ok 且 users=21、activities=3
+curl -s http://127.0.0.1:8080/api/health   # A：ok 且 users=21、activities=4
 curl -s http://127.0.0.1:8081/api/health   # B：同上
 ```
 
@@ -162,7 +162,7 @@ su pgdemo -c 'LD_LIBRARY_PATH=/tmp/pgsql/usr/lib/x86_64-linux-gnu:/tmp/pgsql/usr
 
 ## 快照与恢复
 
-种子标准：21 用户、3 活动、11 参与、0 邀请、0 通知、0 反馈。
+种子标准：21 用户、4 活动、11 参与、0 邀请、0 通知、0 反馈。
 恢复前先停掉对应版本的应用实例。
 
 ```bash
@@ -194,9 +194,9 @@ $M -S ~/workspace/.portable/mysql-data/mysql.sock -u root campus_buddy \
   < runs/<日期>/db-before-mysql.sql
 ```
 
-恢复后复核计数（A 版应回到 21/3/10/0/0/0、B 版 21/3/11/0/0/0——
+恢复后复核计数（A 版应回到 21/4/10/0/0/0、B 版 21/4/11/0/0/0——
 2026-11-06 晚用户定 A 版种子改动：demo01 退出周末学习组，A 版活动
-参与由 11 变 10，B 版未改）与不变量（见下）。
+参与由 11 变 10；2026-11-08 加第 4 个种子活动，活动数 3→4）与不变量（见下）。
 
 ## 不变量复核（两库都必须全 0）
 

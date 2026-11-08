@@ -9,7 +9,7 @@
 （MySQL 8.0.28，8081）按当日抽签决定是否启用（见下）。
 
 1. 查后端健康：`curl -s http://127.0.0.1:8080/api/health`，正常返回 ok 且
-   users=21、activities=3 即通过。
+   users=21、activities=4 即通过。
 2. 不通就重建：`useradd -m pgdemo`（如不存在）→ 复制
    `~/workspace/.portable/pgsql` 到 `/tmp/pgsql` 并 `chmod -R a+rX` →
    `LD_LIBRARY_PATH=/tmp/pgsql/usr/lib/x86_64-linux-gnu:/tmp/pgsql/usr/lib/postgresql/16/lib`
@@ -19,8 +19,9 @@
    `reserved_count` 与 `created_at` 默认值全错 8 小时）→ pg_ctl 启动 →
    建 postgres 超级用户 → createdb campus_buddy → 从
    `~/workspace/campus-buddy/database/backup-2026-11-04.sql` 恢复 →
-   核对计数 21/3/10（A 版；2026-11-06 晚用户定种子改动后，demo01 退出
-   周末学习组，活动参与由 11 变 10；B 版仍为 21/3/11）。重建后验时区：`SHOW timezone;` 应为 Asia/Shanghai，
+   核对计数 21/4/10（A 版；2026-11-06 晚用户定种子改动后，demo01 退出
+   周末学习组，活动参与由 11 变 10；2026-11-08 加第 4 个种子活动「周日羽毛球
+   友谊赛」，demo01 未预报名，活动数 3→4；B 版为 21/4/11）。重建后验时区：`SHOW timezone;` 应为 Asia/Shanghai，
    `SELECT now();` 应带 `+08`；系统时区也应为 Asia/Shanghai
    （`/etc/localtime` → Asia/Shanghai，`date` 应显示 CST）。
 3. 启动 A 版后端：`DB_URL=jdbc:postgresql://127.0.0.1:5433/campus_buddy
@@ -83,6 +84,9 @@ http://127.0.0.1:8081；抽签结果见 `runs/<日期>/ab-assignment.md`）、
 （meeting-follow-up、documents、teamwork_delivery_guard、planning-task-breakdown），再读
 6 份用户报告，按 TEAM.md 的林晚人设去重、归因、定优先级，
 写 `runs/YYYY-MM-DD/digest.md`（含当日全部开发任务 +「待用户定」区）。
+**UI 人工复核（用户 2026-11-07 指令）：AI 生成的 UI 不一定合理，林晚对每轮
+UI 改动逐项人工复核（布局、间距、对比度、字号、文案合理性），不只看测试
+通过；觉得不合理的写进 digest，返工到合理为止。**
 用户长期规则（2026-11-06）：**反馈里需要修的，当天全部修完，不设数量
 上限、不推到明天**（取消原来“每天最多 3 项小改动”的上限）。只有三类
 不进当日任务——新功能、需要改 SRS/SDD 文档的需求变更、与 REQUIREMENTS.md

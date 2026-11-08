@@ -1,4 +1,5 @@
--- 东八区口径，2026-11-06 迁移；种子时间 2026-11-06 晚改为 11 月 8 日 19:09–21:09、demo01 退出周末学习组（用户定）
+-- 东八区口径，2026-11-06 迁移；2026-11-08 种子：第 4 个活动（周日羽毛球友谊赛，组织者 organizer，demo01 未预报名），旧 3 个种子 +24h（截止 11-08 19:09、开始 11-09 19:09–21:09）；任务 11 种子介绍/条件/地点写具体（江安校区、水平费用进条件）；任务 3 通知 type CHECK 已放开 '退出'；任务 1 sweep 已补 READY→OPEN 回流，时间平移后状态 10 秒内自动翻回，不再需要手动复位
+
 --
 -- PostgreSQL database dump
 --
@@ -210,7 +211,7 @@ CREATE TABLE public.notification (
     read_at timestamp without time zone,
     created_at timestamp without time zone DEFAULT now() NOT NULL,
     CONSTRAINT notification_content_check CHECK ((char_length(content) <= 1000)),
-    CONSTRAINT notification_type_check CHECK (((type)::text = ANY (ARRAY[('报名'::character varying)::text, ('候补'::character varying)::text, ('邀请'::character varying)::text, ('变更'::character varying)::text])))
+    CONSTRAINT notification_type_check CHECK (((type)::text = ANY ((ARRAY['报名'::character varying, '候补'::character varying, '邀请'::character varying, '变更'::character varying, '退出'::character varying])::text[])))
 );
 
 
@@ -323,9 +324,10 @@ ALTER TABLE ONLY public.participation ALTER COLUMN id SET DEFAULT nextval('publi
 --
 
 COPY public.activity (id, organizer_id, title, category, description, conditions, location, capacity, deadline, start_time, end_time, status, created_at, updated_at) FROM stdin;
-1	1	周六羽毛球双打	羽毛球	演示活动	请准时参加	体育馆三楼	4	2026-11-07 19:09:12.336937	2026-11-08 19:09:12.336937	2026-11-08 21:09:12.336937	OPEN	2026-11-05 01:09:12.337632	2026-11-05 01:09:12.337632
-2	1	桌游之夜	桌游	演示活动	请准时参加	活动中心201	4	2026-11-07 19:09:12.336937	2026-11-08 19:09:12.336937	2026-11-08 21:09:12.336937	OPEN	2026-11-05 01:09:12.339019	2026-11-05 01:09:12.339019
-3	1	周末学习组	学习组	演示活动	请准时参加	图书馆三楼	10	2026-11-07 19:09:12.336937	2026-11-08 19:09:12.336937	2026-11-08 21:09:12.336937	OPEN	2026-11-05 01:09:12.339985	2026-11-05 01:09:12.339985
+1	1	周六羽毛球双打	羽毛球	周六下午羽毛球双打，新手友好，欢迎一个人来；现场分组轮换，保证每人都能打上。	水平不限，免费参加；自带球拍，没有球拍可提前说一声	江安校区体育馆三楼	4	2026-11-08 19:09:12.336937	2026-11-09 19:09:12.336937	2026-11-09 21:09:12.336937	OPEN	2026-11-05 01:09:12.337632	2026-11-05 01:09:12.337632
+2	1	桌游之夜	桌游	轻松桌游夜，有主持人带玩，新手友好，欢迎一个人来；狼人杀、卡坦岛、剧本杀轮着玩。	水平不限，免费参加；自带想玩的桌游也可以	江安校区活动中心201	4	2026-11-08 19:09:12.336937	2026-11-09 19:09:12.336937	2026-11-09 21:09:12.336937	OPEN	2026-11-05 01:09:12.339019	2026-11-05 01:09:12.339019
+3	1	周末学习组	学习组	周末一起自习，互相监督、互不打扰；中途可以组队讨论题目，新手友好，欢迎一个人来。	水平不限，免费参加；自带学习资料，学习时保持安静	江安校区图书馆三楼	10	2026-11-08 19:09:12.336937	2026-11-09 19:09:12.336937	2026-11-09 21:09:12.336937	OPEN	2026-11-05 01:09:12.339985	2026-11-05 01:09:12.339985
+4	1	周日羽毛球友谊赛	羽毛球	周日羽毛球友谊赛，以球会友、切磋为主；新手友好，欢迎一个人来，现场分组保证每人都有上场机会。	水平不限，免费参加；自带球拍和水	江安校区体育馆三楼	6	2026-11-08 19:09:12.336937	2026-11-09 19:09:12.336937	2026-11-09 21:09:12.336937	OPEN	2026-11-08 09:32:47.802226	2026-11-08 09:32:47.802226
 \.
 
 
@@ -405,7 +407,7 @@ COPY public.participation (id, activity_id, user_id, status, queued_at, joined_a
 -- Name: activity_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
 --
 
-SELECT pg_catalog.setval('public.activity_id_seq', 3, true);
+SELECT pg_catalog.setval('public.activity_id_seq', 4, true);
 
 
 --

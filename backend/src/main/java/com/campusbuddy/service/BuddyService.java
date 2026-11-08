@@ -21,14 +21,28 @@ import java.util.*;
 public class BuddyService {
     private final JdbcTemplate jdbc;
     private final int inviteTtlSeconds;
+    /** 任务 8（2026-11-08 补丁）：递补邀请只在白天时段发出，默认 8:00–22:00（服务器时间 Asia/Shanghai），
+     *  可配：app.invite-day-start-hour / app.invite-day-end-hour。 */
+    private final int dayStartHour;
+    private final int dayEndHour;
     /** 启动时从 DataSource 取数据库产品名判断一次并缓存：MySQL 用 INSERT IGNORE，
      *  PostgreSQL 保持 ON CONFLICT DO NOTHING。两分支语义相同：event_key 冲突时静默跳过。 */
     private final boolean mysql;
 
-    public BuddyService(JdbcTemplate jdbc, @Value("${app.invite-ttl-seconds:120}") int inviteTtlSeconds) {
+    public BuddyService(JdbcTemplate jdbc, @Value("${app.invite-ttl-seconds:120}") int inviteTtlSeconds,
+                        @Value("${app.invite-day-start-hour:8}") int dayStartHour,
+                        @Value("${app.invite-day-end-hour:22}") int dayEndHour) {
         this.jdbc = jdbc;
         this.inviteTtlSeconds = inviteTtlSeconds;
+        this.dayStartHour = dayStartHour;
+        this.dayEndHour = dayEndHour;
         this.mysql = detectMysql(jdbc);
+    }
+
+    /** 任务 8：白天时段判断。时段为 [start, end)，默认 8:00–22:00；22:00 整算夜间。 */
+    public boolean isDaytime(LocalDateTime now) {
+        int h = now.getHour();
+        return h >= dayStartHour && h < dayEndHour;
     }
 
     private static boolean detectMysql(JdbcTemplate jdbc) {
@@ -140,6 +154,18 @@ public class BuddyService {
             if (waiting.isEmpty()) return;
             long partId = ((Number) waiting.get(0).get("id")).longValue();
             long userId = ((Number) waiting.get(0).get("user_id")).longValue();
+            String title = jdbc.queryForObject(
+                    "SELECT title FROM activity WHERE id=?", String.class, activityId);
+            if (!isDaytime(now)) {
+                // 任务 8（补丁，文档不改）：夜间不发正式邀请，只给候补第 1 名发一条提示；
+                // 邀请等白天由 SweepService.backfillDaytimeInvites 补发。event_key 按
+                // (活动, 参与记录) 去重：同一空缺反复触发只提示一次；候补第 1 名换人时
+                // （partId 不同）会给新第 1 名再提示一次。窗口、期限、顺延规则都不变。
+                notify(userId, activityId, null, "邀请",
+                        "活动「" + title + "」已有空缺，将于白天 " + dayStartHour + ":00 后发出邀请，请留意通知。",
+                        "notify:night-hint:" + activityId + ":" + partId);
+                return;
+            }
             LocalDateTime expires = now.plusSeconds(inviteTtlSeconds);
             if (expires.isAfter(deadline)) expires = deadline;
             jdbc.update("UPDATE participation SET status='INVITED', updated_at=? WHERE id=?", ts(now), partId);
@@ -148,11 +174,24 @@ public class BuddyService {
                             "VALUES (?,'PENDING',?,?,?)", partId, ts(now), ts(expires), eventKey);
             Long invId = jdbc.queryForObject(
                     "SELECT id FROM invitation WHERE event_key=?", Long.class, eventKey);
-            String title = jdbc.queryForObject(
-                    "SELECT title FROM activity WHERE id=?", String.class, activityId);
             notify(userId, activityId, invId, "邀请",
                     "活动「" + title + "」已有空缺，请在 " + fmtShanghaiMinute(expires) + " 前确认是否参加。",
                     "notify:" + eventKey);
+        }
+    }
+
+    /** 任务 8：白天补发夜间暂缓的递补邀请。由 SweepService 每轮调用；夜间直接返回。
+     *  只扫有候补的 OPEN 活动，实际发邀请仍走 promote()（容量 / 截止 / 白天三重门都在里面），
+     *  所以不会多发、不会在截止后发。 */
+    @Transactional
+    public void backfillDaytimeInvites(LocalDateTime now) {
+        if (!isDaytime(now)) return;
+        var ids = jdbc.queryForList(
+                "SELECT DISTINCT a.id FROM activity a JOIN participation p ON p.activity_id=a.id AND p.status='WAITING' " +
+                "WHERE a.status='OPEN' AND a.deadline > ? ORDER BY a.id",
+                Long.class, ts(now));
+        for (Long id : ids) {
+            try { promote(id, now); } catch (Exception e) { /* 下一轮重试 */ }
         }
     }
 
@@ -237,15 +276,16 @@ public class BuddyService {
             throw new IllegalStateException("当前状态不可退出：" + st);
         }
         // 任务 3-2：退出产生一条通知，否则退出前后两条「报名成功」无法分辨。
-        // 类型用 '变更'（notification 表 CHECK 只允许 报名/候补/邀请/变更，不改表）。
-        // 退出通知的「退出」字样由前端按类型映射显示（任务 4 前端部分）。
+        // 类型存 '退出'（2026-11-08 任务 3：notification 表 CHECK 已放开 '退出'，
+        // 见 runs/2026-11-08/migrations/001-*；历史 '变更' 退出通知由迁移一并改掉，
+        // 前端按 '变更'→'退出' 的映射可保留作兼容，也可去掉）。
         var actW = jdbc.queryForMap(
                 "SELECT organizer_id, title, location, start_time FROM activity WHERE id=?", activityId);
         String title = (String) actW.get("title");
-        notify(userId, activityId, null, "变更", "你已退出活动「" + title + "」。",
+        notify(userId, activityId, null, "退出", "你已退出活动「" + title + "」。",
                 "notify:withdraw:" + participationId + ":" + now);
         // 任务 2：退出也通知组织者（SDD §6.8 矩阵；之前只通知本人是漏发）。
-        notifyOrganizer(((Number) actW.get("organizer_id")).longValue(), userId, activityId, "变更",
+        notifyOrganizer(((Number) actW.get("organizer_id")).longValue(), userId, activityId, "退出",
                 "「" + nickname(userId) + "」已退出活动「" + title + "」，" + activityWhenWhere(actW) + "。",
                 "notify:org:withdraw:" + participationId + ":" + now);
         return detail(activityId, userId);

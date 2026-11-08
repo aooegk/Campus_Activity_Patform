@@ -17,7 +17,8 @@ public class SeedRunner implements CommandLineRunner {
 
     public SeedRunner(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
-    private long createActivity(long org, String title, String cat, String loc, int cap, LocalDateTime now) {
+    private long createActivity(long org, String title, String cat, String description, String conditions,
+                                String loc, int cap, LocalDateTime now) {
         // 旧代码用 SELECT MAX(id) 取刚插入的活动，与 ApiController.create 是同一个并发错位问题；
         // 启动时虽单线程，仍改用可移植的列名数组取生成键，避免任何并发插入时串位。
         // 必须用 new String[]{"id"} 而不是 Statement.RETURN_GENERATED_KEYS：
@@ -31,8 +32,8 @@ public class SeedRunner implements CommandLineRunner {
             ps.setLong(1, org);
             ps.setString(2, title);
             ps.setString(3, cat);
-            ps.setString(4, "演示活动");
-            ps.setString(5, "请准时参加");
+            ps.setString(4, description);
+            ps.setString(5, conditions);
             ps.setString(6, loc);
             ps.setInt(7, cap);
             ps.setTimestamp(8, Timestamp.valueOf(now.plusDays(2)));
@@ -63,9 +64,27 @@ public class SeedRunner implements CommandLineRunner {
         }
         long org = jdbc.queryForObject("SELECT id FROM app_user WHERE account='organizer'", Long.class);
         LocalDateTime now = LocalDateTime.now();
-        long a = createActivity(org, "周六羽毛球双打", "羽毛球", "体育馆三楼", 4, now);
-        long b = createActivity(org, "桌游之夜", "桌游", "活动中心201", 4, now);
-        long c = createActivity(org, "周末学习组", "学习组", "图书馆三楼", 10, now);
+        // 任务 11（2026-11-08）：种子介绍/条件/地点写具体，不再是「演示活动 / 请准时参加」。
+        // 只改文字，不加字段、不改计数结构（硬约束 6）：校区写进地点文本，水平/费用写进条件文本。
+        // 校区口径：四处种子地点都在江安校区（digest 以「江安校区图书馆三楼」为例；演示活动无
+        // 外部真实校区可核对，四处统一放江安，如用户另有指定再改文字即可）。
+        long a = createActivity(org, "周六羽毛球双打", "羽毛球",
+                "周六下午羽毛球双打，新手友好，欢迎一个人来；现场分组轮换，保证每人都能打上。",
+                "水平不限，免费参加；自带球拍，没有球拍可提前说一声",
+                "江安校区体育馆三楼", 4, now);
+        long b = createActivity(org, "桌游之夜", "桌游",
+                "轻松桌游夜，有主持人带玩，新手友好，欢迎一个人来；狼人杀、卡坦岛、剧本杀轮着玩。",
+                "水平不限，免费参加；自带想玩的桌游也可以",
+                "江安校区活动中心201", 4, now);
+        long c = createActivity(org, "周末学习组", "学习组",
+                "周末一起自习，互相监督、互不打扰；中途可以组队讨论题目，新手友好，欢迎一个人来。",
+                "水平不限，免费参加；自带学习资料，学习时保持安静",
+                "江安校区图书馆三楼", 10, now);
+        // D（2026-11-08 加）：留给轻度用户报，demo01 不预先报名；容量 6，地点含校区
+        long d = createActivity(org, "周日羽毛球友谊赛", "羽毛球",
+                "周日羽毛球友谊赛，以球会友、切磋为主；新手友好，欢迎一个人来，现场分组保证每人都有上场机会。",
+                "水平不限，免费参加；自带球拍和水",
+                "江安校区体育馆三楼", 6, now);
         // A: 3 正式；B: 4 正式 + 2 候补；C: 2 正式
         for (int i = 1; i <= 3; i++)
             jdbc.update("INSERT INTO participation(activity_id, user_id, status, joined_at, updated_at) VALUES (?,?, 'FORMAL', ?, ?)",
