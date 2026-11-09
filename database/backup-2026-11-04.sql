@@ -1,6 +1,5 @@
--- 东八区口径，2026-11-06 迁移；2026-11-08 种子：第 4 个活动（周日羽毛球友谊赛，组织者 organizer，demo01 未预报名），旧 3 个种子 +24h（截止 11-08 19:09、开始 11-09 19:09–21:09）；任务 11 种子介绍/条件/地点写具体（江安校区、水平费用进条件）；任务 3 通知 type CHECK 已放开 '退出'；任务 1 sweep 已补 READY→OPEN 回流，时间平移后状态 10 秒内自动翻回，不再需要手动复位
+-- 东八区口径，2026-11-06 迁移；2026-11-09 种子：4 个活动整体 +24h（截止 11-09 19:09、开始 11-10 19:09–21:09），标题去星期词（羽毛球双打/桌游之夜/学习组/羽毛球友谊赛）；任务 11 种子介绍/条件/地点写具体（江安校区、水平费用进条件）；通知 type CHECK 已放开 '取消'/'留言' + sender_id 列；任务 1 sweep 已补 READY→OPEN 回流
 
---
 -- PostgreSQL database dump
 --
 
@@ -210,8 +209,9 @@ CREATE TABLE public.notification (
     event_key character varying(100) NOT NULL,
     read_at timestamp without time zone,
     created_at timestamp without time zone DEFAULT now() NOT NULL,
+    sender_id bigint,
     CONSTRAINT notification_content_check CHECK ((char_length(content) <= 1000)),
-    CONSTRAINT notification_type_check CHECK (((type)::text = ANY ((ARRAY['报名'::character varying, '候补'::character varying, '邀请'::character varying, '变更'::character varying, '退出'::character varying])::text[])))
+    CONSTRAINT notification_type_check CHECK (((type)::text = ANY ((ARRAY['报名'::character varying, '候补'::character varying, '邀请'::character varying, '变更'::character varying, '退出'::character varying, '取消'::character varying, '留言'::character varying])::text[])))
 );
 
 
@@ -324,10 +324,10 @@ ALTER TABLE ONLY public.participation ALTER COLUMN id SET DEFAULT nextval('publi
 --
 
 COPY public.activity (id, organizer_id, title, category, description, conditions, location, capacity, deadline, start_time, end_time, status, created_at, updated_at) FROM stdin;
-1	1	周六羽毛球双打	羽毛球	周六下午羽毛球双打，新手友好，欢迎一个人来；现场分组轮换，保证每人都能打上。	水平不限，免费参加；自带球拍，没有球拍可提前说一声	江安校区体育馆三楼	4	2026-11-08 19:09:12.336937	2026-11-09 19:09:12.336937	2026-11-09 21:09:12.336937	OPEN	2026-11-05 01:09:12.337632	2026-11-05 01:09:12.337632
-2	1	桌游之夜	桌游	轻松桌游夜，有主持人带玩，新手友好，欢迎一个人来；狼人杀、卡坦岛、剧本杀轮着玩。	水平不限，免费参加；自带想玩的桌游也可以	江安校区活动中心201	4	2026-11-08 19:09:12.336937	2026-11-09 19:09:12.336937	2026-11-09 21:09:12.336937	OPEN	2026-11-05 01:09:12.339019	2026-11-05 01:09:12.339019
-3	1	周末学习组	学习组	周末一起自习，互相监督、互不打扰；中途可以组队讨论题目，新手友好，欢迎一个人来。	水平不限，免费参加；自带学习资料，学习时保持安静	江安校区图书馆三楼	10	2026-11-08 19:09:12.336937	2026-11-09 19:09:12.336937	2026-11-09 21:09:12.336937	OPEN	2026-11-05 01:09:12.339985	2026-11-05 01:09:12.339985
-4	1	周日羽毛球友谊赛	羽毛球	周日羽毛球友谊赛，以球会友、切磋为主；新手友好，欢迎一个人来，现场分组保证每人都有上场机会。	水平不限，免费参加；自带球拍和水	江安校区体育馆三楼	6	2026-11-08 19:09:12.336937	2026-11-09 19:09:12.336937	2026-11-09 21:09:12.336937	OPEN	2026-11-08 09:32:47.802226	2026-11-08 09:32:47.802226
+2	1	桌游之夜	桌游	轻松桌游夜，有主持人带玩，新手友好，欢迎一个人来；狼人杀、卡坦岛、剧本杀轮着玩。	水平不限，免费参加；自带想玩的桌游也可以	江安校区活动中心201	4	2026-11-09 19:09:12.336937	2026-11-10 19:09:12.336937	2026-11-10 21:09:12.336937	OPEN	2026-11-05 01:09:12.339019	2026-11-09 09:11:38.364527
+1	1	羽毛球双打	羽毛球	羽毛球双打，新手友好，欢迎一个人来；现场分组轮换，保证每人都能打上。	水平不限，免费参加；自带球拍，没有球拍可提前说一声	江安校区体育馆三楼	4	2026-11-09 19:09:12.336937	2026-11-10 19:09:12.336937	2026-11-10 21:09:12.336937	OPEN	2026-11-05 01:09:12.337632	2026-11-09 09:11:38.364527
+3	1	学习组	学习组	一起自习，互相监督、互不打扰；中途可以组队讨论题目，新手友好，欢迎一个人来。	水平不限，免费参加；自带学习资料，学习时保持安静	江安校区图书馆三楼	10	2026-11-09 19:09:12.336937	2026-11-10 19:09:12.336937	2026-11-10 21:09:12.336937	OPEN	2026-11-05 01:09:12.339985	2026-11-09 09:11:38.364527
+4	1	羽毛球友谊赛	羽毛球	羽毛球友谊赛，以球会友、切磋为主；新手友好，欢迎一个人来，现场分组保证每人都有上场机会。	水平不限，免费参加；自带球拍和水	江安校区体育馆三楼	6	2026-11-09 19:09:12.336937	2026-11-10 19:09:12.336937	2026-11-10 21:09:12.336937	OPEN	2026-11-08 09:32:47.802226	2026-11-09 09:11:38.364527
 \.
 
 
@@ -380,7 +380,7 @@ COPY public.invitation (id, participation_id, status, issued_at, expires_at, res
 -- Data for Name: notification; Type: TABLE DATA; Schema: public; Owner: postgres
 --
 
-COPY public.notification (id, user_id, activity_id, invitation_id, type, content, event_key, read_at, created_at) FROM stdin;
+COPY public.notification (id, user_id, activity_id, invitation_id, type, content, event_key, read_at, created_at, sender_id) FROM stdin;
 \.
 
 
@@ -592,6 +592,14 @@ ALTER TABLE ONLY public.notification
 
 ALTER TABLE ONLY public.notification
     ADD CONSTRAINT notification_invitation_id_fkey FOREIGN KEY (invitation_id) REFERENCES public.invitation(id);
+
+
+--
+-- Name: notification notification_sender_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.notification
+    ADD CONSTRAINT notification_sender_id_fkey FOREIGN KEY (sender_id) REFERENCES public.app_user(id);
 
 
 --

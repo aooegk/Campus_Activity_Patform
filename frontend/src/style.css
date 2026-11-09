@@ -203,6 +203,10 @@ input:focus, select:focus { outline: 2px solid var(--orange); outline-offset: 1p
 /* 任务 15：「我的活动」四个视图切换 */
 .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .tabs button.active { background: var(--orange); border-color: var(--orange); color: var(--ink); font-weight: 600; }
+/* 任务 3 返工（2026-11-09）：发布表单输入框与卡片同宽（原 max-width 440px
+   时条件占位尾部「场地有电梯」被截断），只放宽发布表单，不动其他卡片。 */
+section.card.publish-form label input, section.card.publish-form label select,
+section.card.publish-form .dt-row { max-width: none; }
 /* 任务 18：登录输入框正式标签；任务 5：发布表单标签 15px 墨色 */
 .field-label { display: block; font-size: 15px; color: var(--ink); font-weight: 600; margin: 10px 0 2px; }
 .field-hint { display: block; font-size: 13px; color: var(--grey); margin-top: 4px; }
@@ -222,6 +226,33 @@ section.card label input, section.card label select {
 }
 /* 「我的活动」分区小标题：沿用卡片标题的衬线字体与墨色，不引入新 token */
 .subhead { font-family: Georgia, "Songti SC", "STSong", "SimSun", serif; font-size: 19px; margin: 20px 0 10px; color: var(--ink); }
+/* 任务 12：日期时间输入 + 日历选择按钮（与发布表单标签同宽，不引入新 token；
+   弹窗用 REA v4 卡片圆角 12px、面板阴影的 border-only 本地近似：1px 线 + 无重阴影）。 */
+.dt-row { display: flex; gap: 8px; align-items: center; max-width: 440px; margin: 6px 0 0; }
+.dt-row input { flex: 1; min-width: 0; margin: 0; }
+.dt-row button { margin: 0; white-space: nowrap; }
+.warn-hint { color: #863311; font-weight: 600; }
+.picker-pop {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+  z-index: 50; width: min(92vw, 340px); background: var(--paper);
+  border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px;
+}
+.picker-pop h4 { margin: 0 0 8px; font-family: Georgia, "Songti SC", "STSong", "SimSun", serif; font-size: 17px; }
+.picker-nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.picker-nav button { margin: 0; }
+.picker-month { font-weight: 600; }
+.picker-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; text-align: center; }
+.picker-week { font-size: 13px; color: var(--grey); padding: 4px 0; }
+.picker-grid button { margin: 0; padding: 6px 0; font-size: 14px; }
+.picker-grid button.active { background: var(--orange); border-color: var(--orange); font-weight: 700; }
+.picker-time { margin: 12px 0 4px; }
+.picker-time select { margin: 0 2px; }
+/* 任务 9：留言区（详情页入口、名单视图列表）；任务 2：改时间表单区。 */
+.message-box { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+.message-box input { width: 100%; max-width: 440px; box-sizing: border-box; }
+.message-item { padding: 10px 0; border-top: 1px solid var(--line); }
+.message-item input { width: 100%; max-width: 440px; box-sizing: border-box; }
+.reschedule-box { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
 @media (max-width: 640px) {
   header { padding: 12px 16px; position: static; gap: 8px; }
   header h1 { font-size: 22px; }

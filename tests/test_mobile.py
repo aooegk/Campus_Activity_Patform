@@ -40,7 +40,8 @@ def run_android(p):
     pg.goto(BASE, wait_until="networkidle")
     pg.screenshot(path=f"{OUT}/mobile-android-login.png")
     check("Android: login page loads", "找个搭子" in pg.content())
-    pg.get_by_role("button", name="同学1").click()
+    pg.locator("#quick-account").select_option(label="同学1")
+    pg.get_by_role("button", name="以该身份进入").click()
     pg.wait_for_timeout(1500)
     check("Android: quick login demo01", "同学1" in pg.locator("main").inner_text() or "你好" in pg.content())
     check("Android: no horizontal overflow (hall)", no_overflow(pg))
@@ -54,7 +55,8 @@ def run_android(p):
     nav(pg, "通知"); pg.wait_for_timeout(1000)
     check("Android: notifications page", True)
     pg.get_by_role("button", name="退出").click(); pg.wait_for_timeout(800)
-    pg.get_by_role("button", name="组织者").click(); pg.wait_for_timeout(1200)
+    pg.locator("#quick-account").select_option(label="组织者")
+    pg.get_by_role("button", name="以该身份进入").click(); pg.wait_for_timeout(1200)
     nav(pg, "发布活动"); pg.wait_for_timeout(800)
     pg.locator("input").nth(3).fill("安卓手机测试") if False else None
     # publish form: inputs in order title, location, capacity, deadline, start, end, description, conditions
@@ -91,7 +93,8 @@ def run_ios(p):
     with urllib.request.urlopen(BASE + "/manifest.json") as r:
         mj = json.loads(r.read())
     check("iOS/Android: manifest valid", mj.get("short_name") == "找个搭子" and len(mj.get("icons", [])) >= 2)
-    pg.get_by_role("button", name="同学5").click()
+    pg.locator("#quick-account").select_option(label="同学5（桌游候补）")
+    pg.get_by_role("button", name="以该身份进入").click()
     pg.wait_for_timeout(1500)
     check("iOS: quick login demo05", "你好" in pg.content())
     check("iOS: no horizontal overflow (hall)", no_overflow(pg))

@@ -62,6 +62,29 @@ public class AuthService {
                 "SELECT id, account, nickname, role, status FROM app_user WHERE id = ?", userId);
     }
 
+    /** 任务 10（2026-11-09）：改密码。校验原密码、新密码符合 SDD 规则
+     *  （8–64 位、含字母与数字）后更新散列，并撤销该用户全部旧会话 token
+     *  （含当前 token，改完须重新登录；参考 SDD“凭据更新、旧会话撤销在同一事务提交”）。 */
+    public void changePassword(long userId, String oldPassword, String newPassword) {
+        if (oldPassword == null || newPassword == null)
+            throw new IllegalStateException("请填写原密码与新密码");
+        var rows = jdbc.queryForList("SELECT password_hash FROM app_user WHERE id=?", userId);
+        if (rows.isEmpty()) throw new IllegalStateException("账号不存在");
+        if (!verify(oldPassword, (String) rows.get(0).get("password_hash")))
+            throw new IllegalStateException("原密码不正确");
+        if (newPassword.length() < 8 || newPassword.length() > 64
+                || newPassword.chars().noneMatch(Character::isLetter)
+                || newPassword.chars().noneMatch(Character::isDigit))
+            throw new IllegalStateException("新密码须为 8–64 位，且含字母与数字");
+        jdbc.update("UPDATE app_user SET password_hash=? WHERE id=?", hash(newPassword), userId);
+        revokeSessionsForUser(userId);
+    }
+
+    /** 撤销某用户全部内存会话 token。 */
+    public void revokeSessionsForUser(long userId) {
+        sessions.entrySet().removeIf(e -> e.getValue().equals(userId));
+    }
+
     /** 演示重置后必须清空，否则序列重启会让旧 token 指向新注册的同 id 用户。 */
     public void clearSessions() {
         sessions.clear();

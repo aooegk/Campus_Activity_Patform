@@ -58,7 +58,7 @@ def main():
     org = login("organizer")
     toks = {f"demo{i:02d}": login(f"demo{i:02d}") for i in range(1, 21)}
     acts = req("GET", "/activities", token=org)
-    a = [x for x in acts if x["title"] == "周六羽毛球双打"][0]
+    a = [x for x in acts if x["title"] == "羽毛球双打"][0]
     aid = a["id"]
     check("种子活动 A 上限 4、已有 3 正式", a["formal_count"] == 3 and a["capacity"] == 4, str(a))
 

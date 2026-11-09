@@ -120,6 +120,17 @@ public class ApiController {
         return Map.of("ok", true, "user", auth.me(require(h)));
     }
 
+    // 任务 10（2026-11-09）：改密码。登录态，传原密码 + 新密码；校验原密码、
+    // 新密码符合 SDD 规则（8–64 位、含字母与数字）后更新散列并撤销全部旧会话
+    // token（含当前 token，改完须重新登录）。注册接口不动。
+    @PostMapping("/me/password")
+    public Map<String, Object> changePassword(@RequestBody Map<String, String> body,
+            @RequestHeader(value = "Authorization", required = false) String h) {
+        long me = require(h);
+        auth.changePassword(me, body.get("old_password"), body.get("new_password"));
+        return Map.of("ok", true);
+    }
+
     // ---- 活动大厅 ----
     @GetMapping("/activities")
     public List<Map<String, Object>> activities(
@@ -174,6 +185,8 @@ public class ApiController {
             out.put("pending_invitations", jdbc.queryForList(
                     "SELECT i.*, u.nickname FROM invitation i JOIN participation p ON p.id=i.participation_id " +
                     "JOIN app_user u ON u.id=p.user_id WHERE p.activity_id=? AND i.status='PENDING' ORDER BY i.expires_at", id));
+            // 任务 9（2026-11-09）：站内留言只在组织者视角返回，不上公开详情页。
+            out.put("messages", buddy.listMessages(id));
         }
         return out;
     }
@@ -252,20 +265,44 @@ public class ApiController {
     @PostMapping("/activities/{id}/cancel")
     public Map<String, Object> cancel(@PathVariable long id,
             @RequestHeader(value = "Authorization", required = false) String h) {
+        // 任务 1（2026-11-09）：取消逻辑与取消通知都在 BuddyService.cancelActivity
+        // 内完成（SDD §6.8：取消通知所有受影响成员）；二次取消幂等，不重发通知。
+        return buddy.cancelActivity(id, require(h));
+    }
+
+    // 任务 2（2026-11-09）：组织者报名截止前改活动时间（开始 / 结束 / 截止三项）。
+    // 只改时间，不扩容量与活动信息；R5 校验（截止前、时间顺序、待确认邀请保护）
+    // 与变更通知都在 BuddyService.reschedule 内。前端入口由苏晴在详情页组织者视角加。
+    @PostMapping("/activities/{id}/reschedule")
+    public Map<String, Object> reschedule(@PathVariable long id,
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = "Authorization", required = false) String h) {
         long me = require(h);
-        var act = jdbc.queryForMap("SELECT organizer_id FROM activity WHERE id=?", id);
-        if (!Objects.equals(((Number) act.get("organizer_id")).longValue(), me))
-            throw new IllegalStateException("只有组织者可以取消活动");
-        // 与 respondInvitation / withdraw 保持同一锁顺序：先锁参与记录，再改邀请。
-        // 旧代码不加事务、不锁记录，取消与接受并发时同样可能出现锁顺序倒置。
-        jdbc.queryForList("SELECT id FROM participation WHERE activity_id=? " +
-                "AND status IN ('FORMAL','WAITING','INVITED') FOR UPDATE", id);
-        jdbc.update("UPDATE activity SET status='CANCELLED', updated_at=? WHERE id=?",
-                Timestamp.valueOf(LocalDateTime.now()), id);
-        jdbc.update("UPDATE invitation SET status='INVALID' WHERE participation_id IN " +
-                "(SELECT id FROM participation WHERE activity_id=?) AND status='PENDING'", id);
-        jdbc.update("UPDATE participation SET status='CANCELLED' WHERE activity_id=? AND status IN ('FORMAL','WAITING','INVITED')", id);
-        return Map.of("ok", true);
+        LocalDateTime deadline, start, end;
+        try {
+            deadline = LocalDateTime.parse((String) body.get("deadline"));
+            start = LocalDateTime.parse((String) body.get("start_time"));
+            end = LocalDateTime.parse((String) body.get("end_time"));
+        } catch (Exception e) {
+            throw new IllegalStateException("时间格式不正确");
+        }
+        return buddy.reschedule(id, me, deadline, start, end);
+    }
+
+    // 任务 9（2026-11-09）：站内留言——详情页「给组织者留言」，登录用户报名前后均可。
+    @PostMapping("/activities/{id}/messages")
+    public Map<String, Object> postMessage(@PathVariable long id,
+            @RequestBody Map<String, String> body,
+            @RequestHeader(value = "Authorization", required = false) String h) {
+        return buddy.postMessage(id, require(h), body.get("content"));
+    }
+
+    // 任务 9：组织者在名单视图回一条（每条留言只能回一条，回复走站内通知给留言人）。
+    @PostMapping("/activities/{id}/messages/{mid}/reply")
+    public Map<String, Object> replyMessage(@PathVariable long id, @PathVariable long mid,
+            @RequestBody Map<String, String> body,
+            @RequestHeader(value = "Authorization", required = false) String h) {
+        return buddy.replyMessage(id, require(h), mid, body.get("content"));
     }
 
     // ---- 报名 / 退出 / 递补 ----

@@ -2,9 +2,12 @@ package com.campusbuddy.service;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.support.GeneratedKeyHolder;
+import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.PreparedStatement;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -73,6 +76,38 @@ public class BuddyService {
         return wall.format(MINUTE_FMT);
     }
 
+    /** 任务 6 + 19（2026-11-09）：通知时间全格式 "yyyy-MM-dd 周X 时段 HH:mm"，
+     *  时段词统一四段（凌晨 0–6 / 上午 6–12 / 下午 12–18 / 晚上 18–24，与
+     *  大厅时段筛选口径一致；不再用「中午」）。 */
+    private static final String[] WEEK = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
+
+    private static String periodOf(int hour) {
+        if (hour < 6) return "凌晨";
+        if (hour < 12) return "上午";
+        if (hour < 18) return "下午";
+        return "晚上";
+    }
+
+    public static String fmtFullMinute(LocalDateTime t) {
+        return String.format("%04d-%02d-%02d %s %s %02d:%02d",
+                t.getYear(), t.getMonthValue(), t.getDayOfMonth(),
+                WEEK[t.getDayOfWeek().getValue() % 7], periodOf(t.getHour()),
+                t.getHour(), t.getMinute());
+    }
+
+    /** 起止全格式：同日只写一次日期与星期，时段词相同时结束只写时间，
+     *  如 "2026-11-10 周二 上午 10:41–下午 12:41"；跨日两边写全。 */
+    public static String fmtFullRange(LocalDateTime start, LocalDateTime end) {
+        if (start.toLocalDate().equals(end.toLocalDate())) {
+            String p1 = periodOf(start.getHour()), p2 = periodOf(end.getHour());
+            String endPart = p1.equals(p2)
+                    ? String.format("%02d:%02d", end.getHour(), end.getMinute())
+                    : p2 + " " + String.format("%02d:%02d", end.getHour(), end.getMinute());
+            return fmtFullMinute(start) + "–" + endPart;
+        }
+        return fmtFullMinute(start) + "–" + fmtFullMinute(end);
+    }
+
     private static Timestamp ts(LocalDateTime t) { return Timestamp.valueOf(t); }
 
     /** 数据库时间列转 LocalDateTime：MySQL 驱动把 DATETIME/TIMESTAMP 列返回为
@@ -90,12 +125,19 @@ public class BuddyService {
 
     private void notify(Long userId, Long activityId, Long invitationId,
                         String type, String content, String eventKey) {
+        notifyWithSender(userId, activityId, invitationId, type, content, eventKey, null);
+    }
+
+    /** 带发送人的通知写入（任务 9 留言/回复用 sender_id；其余通知 sender 为空）。
+     *  sender_id 列由 2026-11-09 迁移 001 加入，双库 schema 已同步。 */
+    private void notifyWithSender(Long userId, Long activityId, Long invitationId,
+                        String type, String content, String eventKey, Long senderId) {
         String sql = mysql
-                ? "INSERT IGNORE INTO notification(user_id, activity_id, invitation_id, type, content, event_key) " +
-                        "VALUES (?,?,?,?,?,?)"
-                : "INSERT INTO notification(user_id, activity_id, invitation_id, type, content, event_key) " +
-                        "VALUES (?,?,?,?,?,?) ON CONFLICT (user_id, event_key) DO NOTHING";
-        jdbc.update(sql, userId, activityId, invitationId, type, content, eventKey);
+                ? "INSERT IGNORE INTO notification(user_id, activity_id, invitation_id, type, content, event_key, sender_id) " +
+                        "VALUES (?,?,?,?,?,?,?)"
+                : "INSERT INTO notification(user_id, activity_id, invitation_id, type, content, event_key, sender_id) " +
+                        "VALUES (?,?,?,?,?,?,?) ON CONFLICT (user_id, event_key) DO NOTHING";
+        jdbc.update(sql, userId, activityId, invitationId, type, content, eventKey, senderId);
     }
 
     /** 组织者通知（任务 2，2026-11-07）：报名 / 进候补 / 退出 / 递补确认时通知组织者。
@@ -112,9 +154,11 @@ public class BuddyService {
         return jdbc.queryForObject("SELECT nickname FROM app_user WHERE id=?", String.class, userId);
     }
 
-    /** 活动时间地点后缀："时间 yyyy-MM-dd HH:mm，地点 xxx"（东八区墙钟直通）。 */
+    /** 活动时间地点后缀（任务 6，2026-11-09）：时间写全
+     *  "时间 2026-11-10 周二 上午 10:41–下午 12:41，地点 xxx"（开始 + 结束、
+     *  星期、时段词）。调用方查活动时须同时取 start_time 与 end_time。 */
     private String activityWhenWhere(Map<String, Object> act) {
-        return "时间 " + fmtShanghaiMinute(asLocalDateTime(act.get("start_time")))
+        return "时间 " + fmtFullRange(asLocalDateTime(act.get("start_time")), asLocalDateTime(act.get("end_time")))
                 + "，地点 " + act.get("location");
     }
 
@@ -175,7 +219,7 @@ public class BuddyService {
             Long invId = jdbc.queryForObject(
                     "SELECT id FROM invitation WHERE event_key=?", Long.class, eventKey);
             notify(userId, activityId, invId, "邀请",
-                    "活动「" + title + "」已有空缺，请在 " + fmtShanghaiMinute(expires) + " 前确认是否参加。",
+                    "活动「" + title + "」已有空缺，请在 " + fmtFullMinute(expires) + " 前确认是否参加。",
                     "notify:" + eventKey);
         }
     }
@@ -280,7 +324,7 @@ public class BuddyService {
         // 见 runs/2026-11-08/migrations/001-*；历史 '变更' 退出通知由迁移一并改掉，
         // 前端按 '变更'→'退出' 的映射可保留作兼容，也可去掉）。
         var actW = jdbc.queryForMap(
-                "SELECT organizer_id, title, location, start_time FROM activity WHERE id=?", activityId);
+                "SELECT organizer_id, title, location, start_time, end_time FROM activity WHERE id=?", activityId);
         String title = (String) actW.get("title");
         notify(userId, activityId, null, "退出", "你已退出活动「" + title + "」。",
                 "notify:withdraw:" + participationId + ":" + now);
@@ -331,7 +375,7 @@ public class BuddyService {
                     ts(now), invitationId);
             // 任务 2：递补确认通知组织者（SDD §6.8 矩阵）。
             var actA = jdbc.queryForMap(
-                    "SELECT organizer_id, title, location, start_time FROM activity WHERE id=?", activityId);
+                    "SELECT organizer_id, title, location, start_time, end_time FROM activity WHERE id=?", activityId);
             notifyOrganizer(((Number) actA.get("organizer_id")).longValue(), userId, activityId, "报名",
                     "「" + nickname(userId) + "」已确认参加活动「" + actA.get("title") + "」，" + activityWhenWhere(actA) + "。",
                     "notify:org:accept:" + invitationId);
@@ -372,6 +416,170 @@ public class BuddyService {
                 "notify:expired:" + invitationId);
         promote(activityId, now);
         return true;
+    }
+
+    /** 任务 1（2026-11-09，P0）：组织者取消活动时给全部受影响成员发取消通知。
+     *  SDD §6.8 通知矩阵：取消通知所有受影响成员。收件人 = 取消前状态为
+     *  FORMAL / WAITING / INVITED 的全部参与者（含组织者本人作为参与者时，
+     *  考研党复现用例就是组织者本人既是发布者又是参与者；不含已退出/已过期者）。
+     *  内容写清原定时间（起止 + 星期 + 时段词，与任务 6 同口径）。
+     *  event_key 按 (活动, 用户) 去重；已取消活动二次取消时收件人为空，
+     *  不重发、仍返回 ok（幂等，任务 20 后端口径）。 */
+    @Transactional
+    public Map<String, Object> cancelActivity(long activityId, long userId) {
+        LocalDateTime now = LocalDateTime.now();
+        var act = jdbc.queryForMap(
+                "SELECT organizer_id, title, location, start_time, end_time FROM activity WHERE id=?", activityId);
+        if (!Objects.equals(((Number) act.get("organizer_id")).longValue(), userId))
+            throw new IllegalStateException("只有组织者可以取消活动");
+        var recipients = jdbc.queryForList(
+                "SELECT user_id FROM participation WHERE activity_id=? AND status IN ('FORMAL','WAITING','INVITED')",
+                activityId);
+        // 与 respondInvitation / withdraw 保持同一锁顺序：先锁参与记录，再改邀请。
+        jdbc.queryForList("SELECT id FROM participation WHERE activity_id=? " +
+                "AND status IN ('FORMAL','WAITING','INVITED') FOR UPDATE", activityId);
+        jdbc.update("UPDATE activity SET status='CANCELLED', updated_at=? WHERE id=?",
+                ts(now), activityId);
+        jdbc.update("UPDATE invitation SET status='INVALID' WHERE participation_id IN " +
+                "(SELECT id FROM participation WHERE activity_id=?) AND status='PENDING'", activityId);
+        jdbc.update("UPDATE participation SET status='CANCELLED' WHERE activity_id=? AND status IN ('FORMAL','WAITING','INVITED')", activityId);
+        String range = fmtFullRange(asLocalDateTime(act.get("start_time")), asLocalDateTime(act.get("end_time")));
+        String title = (String) act.get("title");
+        for (var p : recipients) {
+            long uid = ((Number) p.get("user_id")).longValue();
+            notify(uid, activityId, null, "取消",
+                    "活动「" + title + "」已取消，原定时间 " + range + "，地点 " + act.get("location") + "。",
+                    "notify:cancel:" + activityId + ":" + uid);
+        }
+        return Map.of("ok", true);
+    }
+
+    /** 任务 2（2026-11-09，P0）：组织者报名截止前改活动时间（开始 / 结束 / 截止）。
+     *  SRS 表 3.3-1 R5：活动信息、容量、时间仅在报名截止前可改；修改后仍须满足
+     *  “发出时间早于过期时间，且过期时间不晚于报名截止”，否则拒绝修改。
+     *  本次只做时间，不扩容量与活动信息；不产生新活动、不迁移报名（原 id 与原
+     *  报名记录不变）。改后给全部正式成员与候补成员（含待确认邀请者、含组织者
+     *  本人作为参与者时）发「变更」通知，内容写清旧时间 → 新时间。
+     *  R5 细则（SRS §3.3.3.3）：新报名截止早于已有待确认邀请的过期时间时
+     *  拒绝修改并提示；延后截止不延长已有邀请的过期时间（本方法不动 invitation）。 */
+    @Transactional
+    public Map<String, Object> reschedule(long activityId, long organizerId,
+                                          LocalDateTime deadline, LocalDateTime start, LocalDateTime end) {
+        LocalDateTime now = LocalDateTime.now();
+        var act = jdbc.queryForMap("SELECT * FROM activity WHERE id=? FOR UPDATE", activityId);
+        if (!Objects.equals(((Number) act.get("organizer_id")).longValue(), organizerId))
+            throw new IllegalStateException("只有组织者可以修改活动时间");
+        if (!"OPEN".equals(act.get("status")))
+            throw new IllegalStateException("活动不在报名期，不可改时间");
+        if (!now.isBefore(asLocalDateTime(act.get("deadline"))))
+            throw new IllegalStateException("报名已截止，不可改时间");
+        if (!(now.isBefore(deadline) && !deadline.isAfter(start) && start.isBefore(end)))
+            throw new IllegalStateException("时间需满足：现在 < 报名截止 ≤ 开始 < 结束");
+        var pending = jdbc.queryForList(
+                "SELECT i.expires_at FROM invitation i JOIN participation p ON p.id=i.participation_id " +
+                "WHERE p.activity_id=? AND i.status='PENDING'", activityId);
+        for (var row : pending) {
+            if (deadline.isBefore(asLocalDateTime(row.get("expires_at"))))
+                throw new IllegalStateException("新报名截止早于已有待确认邀请的过期时间，无法修改");
+        }
+        String oldRange = fmtFullRange(asLocalDateTime(act.get("start_time")), asLocalDateTime(act.get("end_time")));
+        var recipients = jdbc.queryForList(
+                "SELECT user_id FROM participation WHERE activity_id=? AND status IN ('FORMAL','WAITING','INVITED')",
+                activityId);
+        jdbc.update("UPDATE activity SET deadline=?, start_time=?, end_time=?, updated_at=? WHERE id=?",
+                ts(deadline), ts(start), ts(end), ts(now), activityId);
+        String newRange = fmtFullRange(start, end);
+        String title = (String) act.get("title");
+        for (var p : recipients) {
+            long uid = ((Number) p.get("user_id")).longValue();
+            notify(uid, activityId, null, "变更",
+                    "活动「" + title + "」时间已变更：原定 " + oldRange + "，现为 " + newRange + "，地点 " + act.get("location") + "。",
+                    "notify:reschedule:" + activityId + ":" + uid + ":" + now);
+        }
+        return Map.of("ok", true, "activity_id", activityId,
+                "deadline", deadline.toString(), "start_time", start.toString(), "end_time", end.toString());
+    }
+
+    /** 任务 9（2026-11-09，P1）：站内留言——详情页「给组织者留言」。
+     *  存储复用 notification 表（type='留言'，sender_id=留言人，不新增表；
+     *  type 值与 sender_id 列由当日迁移 001 加入）。登录用户报名前后均可留言，
+     *  纯文本一句话，上限 200 字（超长拒绝并提示，不截断）。已取消活动不可留言。
+     *  留言行 user_id=组织者（组织者在通知列表里也能看到），仅组织者可见：
+     *  公开详情不返回 messages，只有组织者调详情时 listMessages() 才返回。 */
+    @Transactional
+    public Map<String, Object> postMessage(long activityId, long userId, String content) {
+        var act = jdbc.queryForMap("SELECT organizer_id, status FROM activity WHERE id=?", activityId);
+        if ("CANCELLED".equals(act.get("status")))
+            throw new IllegalStateException("活动已取消，无法留言");
+        if (content == null || content.isBlank())
+            throw new IllegalStateException("留言内容不能为空");
+        if (content.codePointCount(0, content.length()) > 200)
+            throw new IllegalStateException("留言最多 200 字");
+        long organizerId = ((Number) act.get("organizer_id")).longValue();
+        LocalDateTime now = LocalDateTime.now();
+        KeyHolder keyHolder = new GeneratedKeyHolder();
+        final String text = content.trim();
+        final String eventKey = "msg:" + activityId + ":" + userId + ":" + now;
+        jdbc.update(con -> {
+            PreparedStatement ps = con.prepareStatement(
+                    "INSERT INTO notification(user_id, activity_id, type, content, event_key, sender_id) " +
+                    "VALUES (?,?,?,?,?,?)", new String[]{"id"});
+            ps.setLong(1, organizerId);
+            ps.setLong(2, activityId);
+            ps.setString(3, "留言");
+            ps.setString(4, text);
+            ps.setString(5, eventKey);
+            ps.setLong(6, userId);
+            return ps;
+        }, keyHolder);
+        return Map.of("ok", true, "id", keyHolder.getKey().longValue());
+    }
+
+    /** 任务 9：组织者名单视图的留言列表（带留言人昵称与时间，每条附其唯一回复）。
+     *  回复行本身也是 type='留言' 的 notification 行（event_key 以 msg-reply: 开头），
+     *  在此排除，只作为 reply 附在原留言下。 */
+    public List<Map<String, Object>> listMessages(long activityId) {
+        var rows = jdbc.queryForList(
+                "SELECT n.*, u.nickname AS sender_nickname FROM notification n JOIN app_user u ON u.id=n.sender_id " +
+                "WHERE n.activity_id=? AND n.type='留言' AND n.event_key NOT LIKE 'msg-reply:%' " +
+                "ORDER BY n.created_at, n.id", activityId);
+        for (var row : rows) {
+            long mid = ((Number) row.get("id")).longValue();
+            var replies = jdbc.queryForList(
+                    "SELECT content, created_at FROM notification WHERE event_key LIKE ? ORDER BY id LIMIT 1",
+                    "msg-reply:" + mid + ":%");
+            row.put("reply", replies.isEmpty() ? null : replies.get(0));
+        }
+        return rows;
+    }
+
+    /** 任务 9：组织者在名单视图回一条（走站内通知，留言人收到回复通知）。
+     *  每条留言只能回一条（防聊起来变聊天串）；回复内容同样 ≤200 字；
+     *  只有组织者可回，回复对象是原留言人。 */
+    @Transactional
+    public Map<String, Object> replyMessage(long activityId, long organizerId, long messageId, String content) {
+        var act = jdbc.queryForMap("SELECT organizer_id FROM activity WHERE id=?", activityId);
+        if (!Objects.equals(((Number) act.get("organizer_id")).longValue(), organizerId))
+            throw new IllegalStateException("只有组织者可以回复留言");
+        var msg = jdbc.queryForMap(
+                "SELECT * FROM notification WHERE id=? AND activity_id=? AND type='留言'", messageId, activityId);
+        if (((String) msg.get("event_key")).startsWith("msg-reply:"))
+            throw new IllegalStateException("不能回复一条回复");
+        if (msg.get("sender_id") == null)
+            throw new IllegalStateException("留言记录异常，无留言人");
+        long senderId = ((Number) msg.get("sender_id")).longValue();
+        Integer n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM notification WHERE event_key LIKE ?", Integer.class,
+                "msg-reply:" + messageId + ":%");
+        if (n != null && n > 0)
+            throw new IllegalStateException("该留言已回复过");
+        if (content == null || content.isBlank())
+            throw new IllegalStateException("回复内容不能为空");
+        if (content.codePointCount(0, content.length()) > 200)
+            throw new IllegalStateException("回复最多 200 字");
+        notifyWithSender(senderId, activityId, null, "留言", content.trim(),
+                "msg-reply:" + messageId + ":" + LocalDateTime.now(), organizerId);
+        return Map.of("ok", true);
     }
 
     public Map<String, Object> detail(long activityId, long userId) {
