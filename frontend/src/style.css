@@ -37,6 +37,8 @@ header h1 {
   margin: 0;
   letter-spacing: 0.5px;
 }
+/* Logo（2026-11-10）：两个搭子小人线条版，陶土橙 + 墨色细线描边，无填充；PWA 图标同款。 */
+.logo { width: 40px; height: 40px; border-radius: 12px; flex: none; }
 header nav { display: flex; gap: 8px; flex-wrap: wrap; }
 header nav button {
   background: var(--paper);
@@ -106,6 +108,17 @@ main { max-width: 980px; margin: 0 auto; padding: 28px 24px 48px; }
 }
 .card h4 { font-family: Georgia, "Songti SC", "STSong", "SimSun", serif; font-size: 16px; margin: 18px 0 8px; color: var(--ink); }
 .card p { margin: 8px 0; }
+/* UI 配图（2026-11-10）：大厅横幅 + 通用封面 + Canvas 名额环。
+   图片底色固定暖米白，深色模式下也保持原样，像照片卡片一样嵌在卡片里；
+   圆角沿用 16px；封面图带内容哈希，可放心长缓存。 */
+.hero-banner { margin-bottom: 16px; border: 1px solid var(--line); border-radius: 16px; overflow: hidden; background: #FAF9F5; }
+.hero-banner img { display: block; width: 100%; aspect-ratio: 3 / 1; object-fit: cover; }
+.card-cover { margin: -22px -24px 14px; border-radius: 16px 16px 0 0; overflow: hidden; border-bottom: 1px solid var(--line); background: #FAF9F5; }
+.card-cover img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; object-position: 50% 60%; }
+.card-cover.detail-cover img { aspect-ratio: 21 / 9; }
+.card-head { display: flex; align-items: flex-start; gap: 12px; }
+.card-head h3 { flex: 1; }
+.cap-ring { flex: none; width: 56px; height: 56px; }
 .meta, .hint { color: var(--grey); font-size: 14px; line-height: 1.7; }
 button {
   background: var(--paper);

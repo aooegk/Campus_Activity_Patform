@@ -1,5 +1,6 @@
 <template>
   <header>
+    <img class="logo" src="/img/logo.webp" alt="找个搭子" />
     <h1>找个搭子</h1>
     <button class="menu-btn" @click="menuOpen = !menuOpen" :aria-expanded="menuOpen">☰ 菜单</button>
     <button class="ghost theme-btn" @click="toggleTheme" :aria-pressed="darkMode"><span class="theme-icon">{{ darkMode ? '☀️' : '🌙' }}</span><span class="theme-label">{{ darkMode ? ' 浅色模式' : ' 深色模式' }}</span></button>
@@ -47,6 +48,7 @@
     </section>
 
     <section v-if="view==='hall'">
+      <div class="hero-banner"><img src="/img/hero.webp" alt="找个搭子：一起打球、玩桌游、学习" /></div>
       <div class="card">
         <input v-model="q" placeholder="按活动名称、介绍、条件、地点搜索" />
         <select v-model="campus" aria-label="按校区筛选">
@@ -68,7 +70,11 @@
         <button class="primary" @click="retryHall">重新加载</button>
       </div>
       <div v-if="detail" class="card detail-card" ref="detailCard">
-        <h3>详情：{{ detail.title }} <span class="activity-no">#{{ detail.activity_id || detail.id }}</span> <span v-if="detail.status && detail.status !== 'OPEN'" class="badge badge-full">{{ statusLabel(detail) }}</span></h3>
+        <div class="card-cover detail-cover"><img :src="coverImg(detail.activity_id || detail.id)" alt="" /></div>
+        <div class="card-head">
+          <h3>详情：{{ detail.title }} <span class="activity-no">#{{ detail.activity_id || detail.id }}</span> <span v-if="detail.status && detail.status !== 'OPEN'" class="badge badge-full">{{ statusLabel(detail) }}</span></h3>
+          <canvas v-if="detail.formal !== undefined && detail.formal !== null && detail.capacity" class="cap-ring" width="112" height="112" :data-formal="detail.formal" :data-cap="detail.capacity" role="img" :aria-label="'正式 ' + detail.formal + '/' + detail.capacity + ' 人'"></canvas>
+        </div>
         <p>{{ detail.description }}　条件：{{ detail.conditions }}</p>
         <p class="info-line"><span class="info-label">时间</span><b><span class="nowrap">{{ fmtWeek(detail.start_time) }}</span> – <span class="nowrap">{{ fmtWeek(detail.end_time) }}</span></b><span v-if="durationText(detail)">　{{ durationText(detail) }}</span></p>
         <p class="info-line"><span class="info-label">形式</span><b>单次活动</b><span class="hint">　本次活动仅举办一次</span></p>
@@ -150,12 +156,17 @@
         </div>
       </div>
       <div v-if="!hallLoading && !loadError && !filteredHall.length" class="card empty-state">
+        <div class="card-cover"><img src="/img/hero.webp" alt="" /></div>
         <p>{{ emptyHint }}</p>
         <p v-if="q">要不要自己发一个？</p>
         <button v-if="q" class="primary" @click="goPublishWithQuery">去发活动</button>
       </div>
       <div v-for="a in filteredHall" :key="a.id" class="card">
-        <h3 class="card-title" @click="openDetail(a.id)">{{ a.title }} <span class="activity-no">#{{ a.id }}</span> <span v-if="isNewToday(a)" class="badge badge-accent">新发布</span> <span v-if="isFull(a)" class="badge badge-full">已满员</span> <span v-if="a.status && a.status !== 'OPEN'" class="badge badge-full">{{ statusLabel(a) }}</span></h3>
+        <div class="card-cover"><img :src="coverImg(a.id)" alt="" loading="lazy" /></div>
+        <div class="card-head">
+          <h3 class="card-title" @click="openDetail(a.id)">{{ a.title }} <span class="activity-no">#{{ a.id }}</span> <span v-if="isNewToday(a)" class="badge badge-accent">新发布</span> <span v-if="isFull(a)" class="badge badge-full">已满员</span> <span v-if="a.status && a.status !== 'OPEN'" class="badge badge-full">{{ statusLabel(a) }}</span></h3>
+          <canvas class="cap-ring" width="112" height="112" :data-formal="a.formal_count" :data-cap="a.capacity" role="img" :aria-label="'正式 ' + a.formal_count + '/' + a.capacity + ' 人'"></canvas>
+        </div>
         <p>
           <span class="badge">{{ a.category }}</span><span class="badge">{{ a.location }}</span>
           <span v-if="isFull(a) && (a.reserved_count ?? 0) > 0" class="badge badge-big">已占满（正式 {{ a.formal_count }} + 预留 {{ a.reserved_count }}）</span>
@@ -480,7 +491,7 @@ function applyTheme() {
   document.body.classList.toggle('dark', darkMode.value)
   localStorage.setItem('theme', darkMode.value ? 'dark' : 'light')
 }
-function toggleTheme() { darkMode.value = !darkMode.value; applyTheme() }
+function toggleTheme() { darkMode.value = !darkMode.value; applyTheme(); drawCapRings() }
 // 任务 4：退出演示模式（恢复按钮随之隐藏，功能本身保留，?demo=1 可再开）。
 function exitDemoMode() { demoMode.value = false; localStorage.removeItem('demoMode') }
 // 任务 2：报名是否可点——状态是前后端唯一口径（任务 1 定方案 (a) 后，
@@ -819,6 +830,38 @@ async function resignupFromNotice() {
 // 组织者名单，均属当前账号视角）。登录成功后、退出时、token 失效时都走这里。
 function clearAccountState() { mine.value = []; organized.value = []; notifs.value = []; unread.value = 0; detail.value = null; myMessages.value = []; withdrawNotice.value = null; rosterActivity.value = null; rosterError.value = '' }
 function logout() { token.value = ''; localStorage.removeItem('token'); user.value = null; clearAccountState(); view.value = 'hall' }
+// UI 配图（2026-11-10，用户定：用通用配图，不按分类配专用图——专用图使用场景有限）。
+// 3 张通用封面按活动 id 轮换，与分类无关；横幅与空状态共用 hero。
+function coverImg(id) {
+  const n = ((Number(id) || 0) % 3) + 1
+  return '/img/cover-' + n + '.webp'
+}
+// Canvas 名额环：正式/容量画成圆环，中心写数字；深色模式换配色。
+// 画布属性 112（CSS 56，2x 清晰度），按 data-formal / data-cap 画。
+function drawCapRings() {
+  const dark = darkMode.value
+  document.querySelectorAll('canvas.cap-ring').forEach(cv => {
+    const formal = Number(cv.dataset.formal), cap = Number(cv.dataset.cap)
+    if (!cap || Number.isNaN(formal)) return
+    const ctx = cv.getContext('2d')
+    const s = cv.width
+    ctx.clearRect(0, 0, s, s)
+    const cx = s / 2, cy = s / 2, r = s / 2 - 9
+    ctx.lineWidth = 10
+    ctx.strokeStyle = dark ? 'rgba(240,239,236,0.18)' : 'rgba(20,20,19,0.12)'
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke()
+    const frac = Math.min(1, formal / cap)
+    if (frac > 0) {
+      ctx.strokeStyle = '#D97757'
+      ctx.lineCap = 'round'
+      ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac); ctx.stroke()
+    }
+    ctx.fillStyle = dark ? '#f0efec' : '#141413'
+    ctx.font = '600 26px system-ui, sans-serif'
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    ctx.fillText(formal + '/' + cap, cx, cy + 1)
+  })
+}
 async function loadHall() {
   hallLoading.value = true; loadError.value = ''
   try {
@@ -827,7 +870,7 @@ async function loadHall() {
     // 后端 q 只按标题 LIKE，发过去会把介绍/条件命中的活动先筛掉。
     if (category.value) params.set('category', category.value)
     hall.value = await api('/api/activities?' + params.toString())
-  } catch (e) { loadError.value = friendlyErr(e); hall.value = [] } finally { hallLoading.value = false }
+  } catch (e) { loadError.value = friendlyErr(e); hall.value = [] } finally { hallLoading.value = false; await nextTick(); drawCapRings() }
 }
 async function retryHall() { loadHall() }
 async function openDetail(id) {
@@ -839,6 +882,7 @@ async function openDetail(id) {
     // 任务 6：详情卡片在列表上方、当前视口之外时，自动滚动到详情顶部。
     await nextTick()
     detailCard.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    drawCapRings()
   } catch (e) { msg.value = friendlyErr(e) }
 }
 // 任务 17（2026-11-10）：GET /api/activities/{id}/messages，本人只返回自己的留言。
