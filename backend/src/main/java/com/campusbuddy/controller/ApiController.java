@@ -144,12 +144,13 @@ public class ApiController {
                 if (!"ACTIVE".equals(auth.me(me).get("status"))) me = null;
             } catch (Exception e) { me = null; }
         }
+        // 任务 9（2026-11-10）：大厅默认不列已取消活动；/my 与 /my/organized 不动。
         String sql = "SELECT a.*, u.nickname AS organizer_name, " +
                 "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='FORMAL') AS formal_count, " +
                 "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='WAITING') AS waiting_count, " +
                 "(SELECT COUNT(*) FROM invitation i JOIN participation p ON p.id=i.participation_id " +
                 " WHERE p.activity_id=a.id AND i.status='PENDING' AND i.expires_at > now()) AS reserved_count " +
-                "FROM activity a JOIN app_user u ON u.id=a.organizer_id WHERE 1=1 ";
+                "FROM activity a JOIN app_user u ON u.id=a.organizer_id WHERE 1=1 AND a.status <> 'CANCELLED' ";
         List<Object> args = new ArrayList<>();
         if (q != null && !q.isBlank()) { sql += "AND a.title LIKE ? "; args.add("%" + q.trim() + "%"); }
         if (category != null && !category.isBlank() && !"全部".equals(category)) {
@@ -175,7 +176,9 @@ public class ApiController {
         var act = jdbc.queryForMap("SELECT a.*, u.nickname AS organizer_name FROM activity a " +
                 "JOIN app_user u ON u.id=a.organizer_id WHERE a.id=?", id);
         Map<String, Object> out = new LinkedHashMap<>(act);
+        // 任务 3（2026-11-10）：未登录也返回人数（公开计数）；登录照旧返回完整详情。
         if (me != null) out.putAll(buddy.detail(id, me));
+        else out.putAll(buddy.publicCounts(id));
         // 组织者可见名单与候补队列；其他人只能看到人数
         if (me != null && Objects.equals(((Number) act.get("organizer_id")).longValue(), me)) {
             out.put("roster", jdbc.queryForList(
@@ -297,6 +300,19 @@ public class ApiController {
         return buddy.postMessage(id, require(h), body.get("content"));
     }
 
+    // 任务 17（2026-11-10）：留言查询接口——组织者看全部留言，本人只看自己发过的
+    // （各附组织者回复）；他人留言不可见。详情页「我发过的留言」区用此接口。
+    @GetMapping("/activities/{id}/messages")
+    public List<Map<String, Object>> messages(@PathVariable long id,
+            @RequestHeader(value = "Authorization", required = false) String h) {
+        long me = require(h);
+        var act = jdbc.queryForMap("SELECT organizer_id FROM activity WHERE id=?", id);
+        if (Objects.equals(((Number) act.get("organizer_id")).longValue(), me)) {
+            return buddy.listMessages(id);
+        }
+        return buddy.listMyMessages(id, me);
+    }
+
     // 任务 9：组织者在名单视图回一条（每条留言只能回一条，回复走站内通知给留言人）。
     @PostMapping("/activities/{id}/messages/{mid}/reply")
     public Map<String, Object> replyMessage(@PathVariable long id, @PathVariable long mid,
@@ -359,8 +375,13 @@ public class ApiController {
     @GetMapping("/notifications")
     public Map<String, Object> notifications(@RequestHeader(value = "Authorization", required = false) String h) {
         long me = require(h);
+        // 任务 4 配合（2026-11-10）：邀请通知附加 expires_at（LEFT JOIN invitation），
+        // 前端倒计时优先用该字段，解析通知文案为兜底；非邀请类通知该字段为 null。
+        // invitation 表无 created_at 列，ORDER BY created_at 无歧义。
         return Map.of("list", jdbc.queryForList(
-                        "SELECT * FROM notification WHERE user_id=? ORDER BY created_at DESC LIMIT 50", me),
+                        "SELECT n.*, i.expires_at AS expires_at FROM notification n " +
+                        "LEFT JOIN invitation i ON i.id=n.invitation_id " +
+                        "WHERE n.user_id=? ORDER BY n.created_at DESC LIMIT 50", me),
                 "unread", jdbc.queryForObject(
                         "SELECT COUNT(*) FROM notification WHERE user_id=? AND read_at IS NULL", Integer.class, me));
     }

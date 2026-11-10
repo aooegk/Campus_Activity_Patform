@@ -38,7 +38,7 @@
         <option value="demo05">同学5（桌游候补）</option>
       </select>
       <button class="ghost" @click="quick(quickAccount)">以该身份进入（演示）</button>
-      <p class="hint">演示账号，正式使用请用学号注册。</p>
+      <p class="hint">账号可自定（建议用学号），没有学号也可以注册。</p>
       <label class="field-label" for="login-apibase">后端地址（仅手机 App 用）</label>
       <input id="login-apibase" v-model="apiBase" placeholder="后端地址" @change="saveApiBase" />
       <p class="hint">手机 App 才填后端地址，如 http://192.168.1.5:8080；网页 / PWA 留空，用当前地址。</p>
@@ -71,33 +71,52 @@
         <h3>详情：{{ detail.title }} <span class="activity-no">#{{ detail.activity_id || detail.id }}</span> <span v-if="detail.status && detail.status !== 'OPEN'" class="badge badge-full">{{ statusLabel(detail) }}</span></h3>
         <p>{{ detail.description }}　条件：{{ detail.conditions }}</p>
         <p class="info-line"><span class="info-label">时间</span><b><span class="nowrap">{{ fmtWeek(detail.start_time) }}</span> – <span class="nowrap">{{ fmtWeek(detail.end_time) }}</span></b><span v-if="durationText(detail)">　{{ durationText(detail) }}</span></p>
+        <p class="info-line"><span class="info-label">形式</span><b>单次活动</b><span class="hint">　本次活动仅举办一次</span></p>
         <p class="info-line"><span class="info-label">地点</span><b>{{ detail.location }}</b></p>
         <p class="info-line"><span class="info-label">组织者</span><b>{{ detail.organizer_name }}</b></p>
         <p class="info-line"><span class="info-label">报名截止</span><b><span class="nowrap">{{ fmtWeek(detail.deadline) }}</span></b><span v-if="detail.status !== 'CANCELLED'">　{{ deadlineCountdown(detail) }}</span></p>
-        <p class="info-line"><span class="info-label">名额</span><b>正式 {{ detail.formal }}/{{ detail.capacity }}　预留 {{ detail.reserved }}　候补 {{ detail.waiting }}</b><span v-if="isFull(detail)">　已满员</span></p>
+        <p v-if="detail.formal !== undefined && detail.formal !== null && detail.reserved !== undefined && detail.waiting !== undefined" class="info-line"><span class="info-label">名额</span><b>正式 {{ detail.formal }}/{{ detail.capacity }}　预留 {{ detail.reserved }}　候补 {{ detail.waiting }}</b><span v-if="isFull(detail)">　已满员</span></p>
         <p v-if="detail.reserved > 0" class="hint">预留是指已发出递补邀请、待对方确认的名额；对方确认后转为正式，过期则顺延给下一位候补。</p>
+        <details class="term-help">
+          <summary>术语解释：候补 / 递补 / 预留 / 正式成员</summary>
+          <p class="hint">正式成员：已占一个名额，可以参加活动。</p>
+          <p class="hint">候补：名额满了，先排队；有人退出时按顺序递补。</p>
+          <p class="hint">递补：有人退出空出名额时，按候补顺序邀请下一位参加。</p>
+          <p class="hint">预留：已发出递补邀请、等对方确认的名额；对方确认后转为正式，过期则顺延给下一位候补。</p>
+        </details>
         <p v-if="detail.my_status" class="info-line"><span class="info-label">我的状态</span><b>{{ statusText(detail.my_status) }}<span v-if="detail.my_rank">，候补第 {{ detail.my_rank }} 名</span><span v-if="detail.invitation_expires_at">，请在 <span class="nowrap">{{ fmtWeek(detail.invitation_expires_at) }}</span> 前确认</span></b></p>
         <p v-if="detail.status === 'CANCELLED'" class="info-line"><b>该活动已取消</b></p>
         <template v-if="user && detail.status !== 'CANCELLED' && (!detail.my_status || ['WITHDRAWN','EXPIRED','CANCELLED'].includes(detail.my_status))">
-          <button v-if="canSignup(detail)" class="primary" :disabled="signupBusy" @click="signup(detail.activity_id || detail.id)">{{ signupBusy ? '提交中…' : '报名' }}</button>
+          <button v-if="canSignup(detail)" class="primary" :disabled="signupBusy" @click="signup(detail.activity_id || detail.id)">{{ signupBusy ? '提交中…' : (isFull(detail) ? '报名候补' : '报名') }}</button>
           <button v-else class="primary" disabled>{{ signupDisabledReason(detail) }}</button>
           <p class="hint">报名后组织者仅能看到你的昵称，不会索要或公开你的联系方式。</p>
+          <p v-if="isFull(detail)" class="hint">名额已满，报名将进入候补队列，有人退出时按顺序递补。</p>
         </template>
-        <button v-if="user && detail.status !== 'CANCELLED' && detail.participation_id && ['FORMAL','WAITING'].includes(detail.my_status)" class="warn" @click="withdraw(detail.participation_id, detail.activity_id || detail.id, detail.title)">取消报名 / 放弃候补</button>
+        <button v-if="user && detail.status !== 'CANCELLED' && detail.participation_id && ['FORMAL','WAITING'].includes(detail.my_status)" class="warn" @click="withdraw(detail.participation_id, detail.activity_id || detail.id, detail.title)">{{ detail.my_status === 'WAITING' ? '放弃候补' : '取消报名' }}</button>
         <p v-if="user && detail.invitation_id" class="info-line"><span class="info-label">递补邀请</span><b v-if="inviteSecondsLeft(detail.invitation_expires_at) !== undefined && inviteSecondsLeft(detail.invitation_expires_at) !== null">剩余 {{ inviteSecondsLeft(detail.invitation_expires_at) }} 秒，请及时确认</b><b v-else-if="inviteSecondsLeft(detail.invitation_expires_at) === null">邀请已过期</b></p>
         <p v-if="user && detail.invitation_id" class="hint">拒绝后将退出候补队列，如需再排队请重新报名。</p>
         <button v-if="user && detail.invitation_id && inviteSecondsLeft(detail.invitation_expires_at) !== null" class="primary" @click="accept(detail.invitation_id)">接受递补</button>
         <button v-if="user && detail.invitation_id && inviteSecondsLeft(detail.invitation_expires_at) !== null" class="warn" @click="reject(detail.invitation_id)">拒绝递补</button>
-        <div v-if="user && detail.status !== 'CANCELLED'" class="message-box">
+        <div v-if="user && detail.status !== 'CANCELLED' && !detail.roster" class="message-box">
           <label class="field-label" for="message-draft">给组织者留言</label>
           <input id="message-draft" v-model="messageDraft" placeholder="如：请问场地有电梯吗？" maxlength="200" />
           <button class="ghost" @click="sendMessage(detail.activity_id || detail.id)">发送留言</button>
           <p class="hint">留言仅组织者可见，不公开联系方式。</p>
         </div>
+        <div v-if="myMessages.length && !detail.roster" class="my-messages">
+          <h4>我发过的留言</h4>
+          <div v-for="m in myMessages" :key="'mm-' + m.id" class="message-item">
+            <p><span class="nowrap">{{ fmtWeek(m.created_at) }}</span></p>
+            <p>{{ m.content }}</p>
+            <p v-if="m.reply" class="hint">组织者回复（{{ fmtWeek(m.reply.created_at) }}）：{{ m.reply.content }}</p>
+            <p v-else class="hint">组织者尚未回复</p>
+          </div>
+        </div>
         <div v-if="detail.roster">
           <h4>组织者名单</h4>
           <p v-for="r in detail.roster" :key="r.id">{{ r.nickname }}：{{ statusText(r.status) }}</p>
           <p v-for="inv in detail.pending_invitations" :key="inv.id">待确认邀请：{{ inv.nickname }}，截止 <span class="nowrap">{{ fmtWeek(inv.expires_at) }}</span></p>
+          <p v-if="!detail.roster.length" class="meta">暂无报名者。</p>
           <div v-if="detail.messages">
             <h4>收到的留言</h4>
             <div v-for="m in detail.messages" :key="'msg-' + m.id" class="message-item">
@@ -132,16 +151,19 @@
       </div>
       <div v-if="!hallLoading && !loadError && !filteredHall.length" class="card empty-state">
         <p>{{ emptyHint }}</p>
+        <p v-if="q">要不要自己发一个？</p>
+        <button v-if="q" class="primary" @click="goPublishWithQuery">去发活动</button>
       </div>
       <div v-for="a in filteredHall" :key="a.id" class="card">
-        <h3>{{ a.title }} <span class="activity-no">#{{ a.id }}</span> <span v-if="isFull(a)" class="badge badge-full">已满员</span> <span v-if="a.status && a.status !== 'OPEN'" class="badge badge-full">{{ statusLabel(a) }}</span></h3>
+        <h3 class="card-title" @click="openDetail(a.id)">{{ a.title }} <span class="activity-no">#{{ a.id }}</span> <span v-if="isNewToday(a)" class="badge badge-accent">新发布</span> <span v-if="isFull(a)" class="badge badge-full">已满员</span> <span v-if="a.status && a.status !== 'OPEN'" class="badge badge-full">{{ statusLabel(a) }}</span></h3>
         <p>
           <span class="badge">{{ a.category }}</span><span class="badge">{{ a.location }}</span>
-          <span class="badge badge-big">正式 {{ a.formal_count }}/{{ a.capacity }}</span>
-          <span class="badge">预留 {{ a.reserved_count }}</span><span class="badge">候补 {{ a.waiting_count }} 人</span>
+          <span v-if="isFull(a) && (a.reserved_count ?? 0) > 0" class="badge badge-big">已占满（正式 {{ a.formal_count }} + 预留 {{ a.reserved_count }}）</span>
+          <span v-else class="badge badge-big">正式 {{ a.formal_count }}/{{ a.capacity }}</span>
+          <span v-if="(a.reserved_count ?? 0) > 0 && !isFull(a)" class="badge">预留 {{ a.reserved_count }}</span><span class="badge">候补 {{ a.waiting_count }} 人</span>
           <span class="badge badge-accent" v-if="a.my_status">我的状态：{{ statusText(a.my_status) }}</span>
         </p>
-        <p class="meta card-meta"><span class="nowrap">报名截止：{{ fmtWeek(a.deadline) }}</span>　<span class="nowrap">开始：{{ fmtWeek(a.start_time) }}</span>　组织者：{{ a.organizer_name }}</p>
+        <p class="meta card-meta"><span class="nowrap">报名截止：{{ fmtWeek(a.deadline) }}</span>　<span class="nowrap">开始：{{ fmtWeek(a.start_time) }}</span>　<span class="nowrap">组织者：{{ a.organizer_name }}</span></p>
         <p v-if="a.status !== 'CANCELLED'" class="meta card-meta"><span class="nowrap">{{ deadlineCountdown(a) }}</span></p>
         <button @click="openDetail(a.id)">{{ cardButtonText(a) }}</button>
       </div>
@@ -165,7 +187,7 @@
       </div>
       <div v-if="myTab==='organized'">
         <div v-for="o in organized" :key="'org-' + o.id" class="card">
-          <h3>{{ o.title }} <span class="activity-no">#{{ o.id }}</span></h3>
+          <h3 class="card-title" @click="go('hall'); openDetail(o.id)">{{ o.title }} <span class="activity-no">#{{ o.id }}</span></h3>
           <p>
             <span class="badge">{{ o.category }}</span><span class="badge">{{ o.location }}</span>
             <span class="badge badge-big">正式 {{ o.formal_count }}/{{ o.capacity }}</span>
@@ -185,7 +207,7 @@
             <span v-if="p.status==='INVITED' && inviteSecondsLeft(p.invitation_expires_at) !== undefined">　<span v-if="inviteSecondsLeft(p.invitation_expires_at) !== null">剩余 {{ inviteSecondsLeft(p.invitation_expires_at) }} 秒</span><span v-else>邀请已过期</span></span>
           </p>
           <p v-if="p.status==='INVITED'" class="hint">拒绝后将退出候补队列，如需再排队请重新报名。</p>
-          <button v-if="['FORMAL','WAITING'].includes(p.status)" class="warn" @click="withdraw(p.id, p.activity_id, p.title)">取消 / 放弃</button>
+          <button v-if="['FORMAL','WAITING'].includes(p.status)" class="warn" @click="withdraw(p.id, p.activity_id, p.title)">{{ p.status === 'WAITING' ? '放弃候补' : '取消报名' }}</button>
           <button v-if="['WITHDRAWN','EXPIRED','CANCELLED'].includes(p.status)" class="primary" @click="resignup(p.activity_id)">重新报名</button>
           <button v-if="p.invitation_id && p.status==='INVITED' && inviteSecondsLeft(p.invitation_expires_at) !== null" class="primary" @click="accept(p.invitation_id); loadMy()">接受递补</button>
           <button v-if="p.invitation_id && p.status==='INVITED' && inviteSecondsLeft(p.invitation_expires_at) !== null" class="warn" @click="reject(p.invitation_id); loadMy()">拒绝递补</button>
@@ -230,6 +252,7 @@
       <button @click="readAll">全部标为已读</button>
       <div v-for="g in groupedNotifs" :key="g.key" class="card notif-row" :class="{'notif-unread': !g.latest.read_at}">
         <p><b>{{ notifTypeText(g.latest.type) }}</b>　{{ g.latest.content }}</p>
+        <p v-if="inviteCountdownText(g.latest) !== undefined" class="meta"><b>{{ inviteCountdownText(g.latest) }}</b></p>
         <p v-if="g.count > 1" class="meta">同一活动 30 分钟内还有 {{ g.count - 1 }} 条同类通知，已折叠为最新一条。</p>
         <button v-if="g.count > 1" class="ghost" @click="toggleGroup(g.key)">{{ expandedGroups.has(g.key) ? '收起折叠的通知' : '展开被折叠的 ' + (g.count - 1) + ' 条' }}</button>
         <div v-if="expandedGroups.has(g.key)">
@@ -329,6 +352,8 @@ const campus = ref('')
 const nowTick = ref(Date.now())
 // 任务 9：留言草稿（详情页）与回复草稿（按留言 id）。
 const messageDraft = ref('')
+// 任务 17（2026-11-10）：本人发过的留言及组织者回复（GET /api/activities/{id}/messages）。
+const myMessages = ref([])
 const replyDrafts = ref({})
 // 任务 10：改密码表单。
 const pwForm = ref({ oldPw: '', newPw: '' })
@@ -416,6 +441,25 @@ function deadlineCountdown(a) {
   const h = Math.floor(mins / 60), r = mins % 60
   return r ? `距截止还有 ${h} 小时 ${r} 分钟` : `距截止还有 ${h} 小时`
 }
+// 任务 4（2026-11-10）：邀请通知倒计时。优先用后端通知行带的 expires_at
+// （配合任务 4 后端改动，LEFT JOIN invitation 返回）；无该字段时解析通知文案
+// 里的截止时间（后端 fmtFullMinute 固定格式「请在 2026-11-10 周二 上午 09:16 前确认」）；
+// undefined = 非邀请通知或解析不到（不显示倒计时）；'已过期' = 已过截止。
+function inviteCountdownText(n) {
+  if (!n || n.type !== '邀请') return undefined
+  let ts = NaN
+  if (n.expires_at) ts = parseShanghai(n.expires_at)
+  if (Number.isNaN(ts)) {
+    const m = String(n.content || '').match(/请在\s*(\d{4}-\d{2}-\d{2})\s+\S+\s+\S+\s+(\d{2}):(\d{2})\s*前确认/)
+    if (!m) return undefined
+    ts = parseShanghai(m[1] + ' ' + m[2] + ':' + m[3])
+  }
+  const diff = ts - nowTick.value
+  if (diff <= 0) return '已过期'
+  const secs = Math.floor(diff / 1000)
+  if (secs >= 60) return `还剩 ${Math.floor(secs / 60)} 分 ${secs % 60} 秒`
+  return `还剩 ${secs} 秒`
+}
 // 任务 18：递补邀请剩余秒数。undefined = 无过期时间（不显示倒计时，
 // 按钮照常可点）；null = 已过期；数字 = 剩余秒数。
 function inviteSecondsLeft(exp) {
@@ -485,6 +529,17 @@ function isFull(a) {
   const reserved = a.reserved_count ?? a.reserved ?? 0
   return formal + reserved >= (a.capacity ?? 0)
 }
+// 任务 8（2026-11-10）：当日新发布判断。created_at 是东八区墙钟字符串，
+// 前 10 位即东八区日期；今天的日期按 +08:00 算，与浏览器时区无关。
+function shanghaiTodayStr() {
+  const d = new Date(Date.now() + 8 * 3600 * 1000)
+  return d.toISOString().slice(0, 10)
+}
+function isNewToday(a) {
+  if (!a || !a.created_at) return false
+  const m = String(a.created_at).match(/^(\d{4}-\d{2}-\d{2})/)
+  return !!m && m[1] === shanghaiTodayStr()
+}
 // 任务 5：大厅卡片按钮按「我的状态」变文案。任务 21：已取消活动只写「查看详情」。
 function cardButtonText(a) {
   if (a.status === 'CANCELLED') return '查看详情'
@@ -517,13 +572,19 @@ const emptyHint = computed(() => {
   if (category.value) return `「${category.value}」分类下暂无活动`
   return '暂无活动，快来发布第一个吧'
 })
+// 任务 13（2026-11-10）：搜索空结果的「去发活动」入口，标题预填搜索词。
+function goPublishWithQuery() {
+  form.value.title = q.value.trim()
+  view.value = 'publish'
+}
 // 任务 6 + 任务 12：大厅前端筛选。搜索在前端做（后端 /api/activities 的 q
 // 只按标题 LIKE，改后端不在本轮前端任务内）：匹配标题 + 介绍 + 参与条件 +
 // 地点（任务 4）；q 本身是「凌晨/上午/下午/晚上」时段词时，也按开始时间
 // 归属匹配；再叠加时间段下拉、校区下拉筛选（任务 5，地点文本派生）。
 // 类别仍走后端参数。
 const filteredHall = computed(() => {
-  let list = hall.value
+  // 任务 9（2026-11-10）：已取消活动默认不在大厅列出。
+  let list = hall.value.filter(a => a.status !== 'CANCELLED')
   const needle = q.value.trim().toLowerCase()
   if (needle) {
     const periodWords = ['凌晨', '上午', '下午', '晚上']
@@ -613,10 +674,12 @@ function friendlyErr(e) {
 // 任务 12：日期时间文本框解析。接受「2026-11-09 21:00」与
 // 「2026-11-09T21:00」（移动端测试填 T 格式）两种写法，统一显示为空格格式
 // （年-月-日 24 小时制，与下方「已选」行一致）；非法返回 null。
+// 任务 1（2026-11-10）：同时接受后端 ISO 格式（如 2026-11-12T12:00:00.000+08:00，
+// 带秒/毫秒/时区后缀），否则改时间预填全部落空。
 // 后端 LocalDateTime.parse 只认 T 格式，提交时用 toApiDT 转回。
 function parseDTInput(s) {
   if (!s) return ''
-  const m = String(s).trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2}))?$/)
+  const m = String(s).trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$/)
   if (!m) return null
   const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5])
   if (d.getFullYear() !== +m[1] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[3]
@@ -754,7 +817,7 @@ async function resignupFromNotice() {
 // 任务 3（换号串号）：按账号缓存的前端状态集中清理——通知列表、
 // 未读数、我的活动（我报名的 + 我组织的）、详情页（含 my_status /
 // 组织者名单，均属当前账号视角）。登录成功后、退出时、token 失效时都走这里。
-function clearAccountState() { mine.value = []; organized.value = []; notifs.value = []; unread.value = 0; detail.value = null; withdrawNotice.value = null; rosterActivity.value = null; rosterError.value = '' }
+function clearAccountState() { mine.value = []; organized.value = []; notifs.value = []; unread.value = 0; detail.value = null; myMessages.value = []; withdrawNotice.value = null; rosterActivity.value = null; rosterError.value = '' }
 function logout() { token.value = ''; localStorage.removeItem('token'); user.value = null; clearAccountState(); view.value = 'hall' }
 async function loadHall() {
   hallLoading.value = true; loadError.value = ''
@@ -770,10 +833,18 @@ async function retryHall() { loadHall() }
 async function openDetail(id) {
   try {
     detail.value = await api('/api/activities/' + id); msg.value = ''
+    // 任务 17（2026-11-10）：非组织者视角拉取本人发过的留言及组织者回复；
+    // 组织者走名单视图的全部留言，不拉此接口。
+    if (user.value && !detail.value.roster) loadMyMessages(id); else myMessages.value = []
     // 任务 6：详情卡片在列表上方、当前视口之外时，自动滚动到详情顶部。
     await nextTick()
     detailCard.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   } catch (e) { msg.value = friendlyErr(e) }
+}
+// 任务 17（2026-11-10）：GET /api/activities/{id}/messages，本人只返回自己的留言。
+async function loadMyMessages(id) {
+  if (!token.value) { myMessages.value = []; return }
+  try { myMessages.value = await api('/api/activities/' + id + '/messages') } catch (_) { myMessages.value = [] }
 }
 async function signup(id) {
   if (signupBusy.value) return
@@ -889,10 +960,14 @@ async function submitReschedule(id) {
   if (rescheduleBusy.value) return
   rescheduleBusy.value = true
   try {
+    // 任务 1（2026-11-10）：逐字段校验，报错指明是哪个字段。
+    const rescheduleLabels = { deadline: '报名截止', start_time: '开始时间', end_time: '结束时间' }
+    for (const k of ['deadline', 'start_time', 'end_time']) {
+      if (!toApiDT(rescheduleForm.value[k])) { msg.value = `${rescheduleLabels[k]}为空或格式不对，请用「2026-11-09 21:00」这样的格式填写`; return }
+    }
     const deadline = toApiDT(rescheduleForm.value.deadline)
     const start = toApiDT(rescheduleForm.value.start_time)
     const end = toApiDT(rescheduleForm.value.end_time)
-    if (!deadline || !start || !end) { msg.value = '时间格式不对，请用「2026-11-09 21:00」这样的格式填写'; return }
     // 后端 reschedule 接口要带秒的 T 格式（见 changes.md 接口约定）。
     await api('/api/activities/' + id + '/reschedule', 'POST', { deadline: deadline + ':00', start_time: start + ':00', end_time: end + ':00' })
     rescheduleOpen.value = false
@@ -910,10 +985,12 @@ async function sendMessage(id) {
   try {
     await api('/api/activities/' + id + '/messages', 'POST', { content })
     messageDraft.value = ''
+    // 任务 17（2026-11-10）：发完刷新详情（新留言进「我发过的留言」区），
+    // 再置提示（openDetail 会清空 msg，须在它之后设置）。
+    try { await openDetail(id) } catch (_) {}
     msg.value = '留言已发送，组织者会看到'
     const snapMsg = msg.value
     setTimeout(() => { if (msg.value === snapMsg) msg.value = '' }, 5000)
-    if (detail.value && detail.value.roster) { try { await openDetail(id) } catch (_) {} }
   } catch (e) { msg.value = friendlyErr(e) }
 }
 // 任务 9：组织者在名单视图回一条留言（每条留言只能回一条，后端校验）。

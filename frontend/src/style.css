@@ -172,6 +172,13 @@ input:focus, select:focus { outline: 2px solid var(--orange); outline-offset: 1p
 /* 任务 9：大厅关键数字提到 15px */
 .badge-big { font-size: 15px; }
 .card-meta { font-size: 15px; }
+/* 任务 7（2026-11-10）：卡片标题可点进详情 */
+.card-title { cursor: pointer; }
+.card-title:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* 任务 15（2026-11-10）：详情页术语解释区 */
+.term-help { margin: 8px 0; font-size: 14px; }
+.term-help summary { cursor: pointer; color: var(--grey); }
+.term-help p { margin: 4px 0; }
 /* 任务 4：日期时间不折行断开 */
 .nowrap { white-space: nowrap; }
 /* 任务 9：详情关键信息拆行、16px、数值加粗 */

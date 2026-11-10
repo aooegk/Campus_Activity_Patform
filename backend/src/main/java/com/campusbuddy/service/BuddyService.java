@@ -360,8 +360,10 @@ public class BuddyService {
             jdbc.update("UPDATE invitation SET status='EXPIRED' WHERE id=?", invitationId);
             jdbc.update("UPDATE participation SET status='EXPIRED', updated_at=? WHERE id=?",
                     ts(now), part.get("id"));
+            // 任务 11（2026-11-10）：与 expireOne 同口径，按当时有无下一位候补区分文案。
+            boolean hasNext = waitingCount(activityId) > 0;
             promote(activityId, now);
-            throw new IllegalStateException("邀请已过期，已顺延至下一位候补");
+            throw new IllegalStateException(hasNext ? "邀请已过期，已顺延至下一位候补" : "邀请已过期，名额已空出，可重新报名");
         }
         if (accept) {
             int changed = jdbc.update(
@@ -411,8 +413,13 @@ public class BuddyService {
         String title = jdbc.queryForObject("SELECT title FROM activity WHERE id=?", String.class, activityId);
         jdbc.update("UPDATE notification SET read_at=? WHERE invitation_id=? AND type='邀请' AND read_at IS NULL",
                 ts(now), invitationId);
+        // 任务 11（2026-11-10）：按当时有无下一位有效候补区分文案——有下一位才写顺延，
+        // 无人写「名额已空出，可重新报名」（参与记录已置 EXPIRED，不计入 waitingCount）。
+        boolean hasNext = waitingCount(activityId) > 0;
         notify(userId, activityId, invitationId, "邀请",
-                "活动「" + title + "」的递补邀请已过期，名额已顺延至下一位候补。",
+                hasNext
+                        ? "活动「" + title + "」的递补邀请已过期，名额已顺延至下一位候补。"
+                        : "活动「" + title + "」的递补邀请已过期，名额已空出，可重新报名。",
                 "notify:expired:" + invitationId);
         promote(activityId, now);
         return true;
@@ -508,7 +515,7 @@ public class BuddyService {
      *  公开详情不返回 messages，只有组织者调详情时 listMessages() 才返回。 */
     @Transactional
     public Map<String, Object> postMessage(long activityId, long userId, String content) {
-        var act = jdbc.queryForMap("SELECT organizer_id, status FROM activity WHERE id=?", activityId);
+        var act = jdbc.queryForMap("SELECT organizer_id, title, status FROM activity WHERE id=?", activityId);
         if ("CANCELLED".equals(act.get("status")))
             throw new IllegalStateException("活动已取消，无法留言");
         if (content == null || content.isBlank())
@@ -518,7 +525,9 @@ public class BuddyService {
         long organizerId = ((Number) act.get("organizer_id")).longValue();
         LocalDateTime now = LocalDateTime.now();
         KeyHolder keyHolder = new GeneratedKeyHolder();
-        final String text = content.trim();
+        // 任务 5（2026-11-10）：留言通知带活动标题，如「留言（羽毛球双打）：……」，
+        // 组织者名下多个活动的留言通知能凭标题区分；listMessages 展示时再剥掉此前缀。
+        final String text = "留言（" + act.get("title") + "）：" + content.trim();
         final String eventKey = "msg:" + activityId + ":" + userId + ":" + now;
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement(
@@ -539,11 +548,32 @@ public class BuddyService {
      *  回复行本身也是 type='留言' 的 notification 行（event_key 以 msg-reply: 开头），
      *  在此排除，只作为 reply 附在原留言下。 */
     public List<Map<String, Object>> listMessages(long activityId) {
-        var rows = jdbc.queryForList(
-                "SELECT n.*, u.nickname AS sender_nickname FROM notification n JOIN app_user u ON u.id=n.sender_id " +
-                "WHERE n.activity_id=? AND n.type='留言' AND n.event_key NOT LIKE 'msg-reply:%' " +
-                "ORDER BY n.created_at, n.id", activityId);
+        return queryMessages(activityId, null);
+    }
+
+    /** 任务 17（2026-11-10，P2）：留言者本人查自己发过的留言及组织者回复。
+     *  只返回 sender_id = 本人的留言行，他人留言不可见；组织者走 listMessages() 看全部。 */
+    public List<Map<String, Object>> listMyMessages(long activityId, long userId) {
+        return queryMessages(activityId, userId);
+    }
+
+    /** 任务 9 / 17 公共查询：留言行（排除回复行本身，每条附唯一回复）。
+     *  senderId 为 null 时返回全部留言（组织者视角），否则只返回该 sender 的留言。
+     *  展示时剥掉任务 5（2026-11-10）写入通知的「留言（<标题>）：」前缀——
+     *  名单视图 / 本人留言区已在当活动语境下，标题是多余的；通知列表仍显示带标题的原文。 */
+    private List<Map<String, Object>> queryMessages(long activityId, Long senderId) {
+        String title = jdbc.queryForObject("SELECT title FROM activity WHERE id=?", String.class, activityId);
+        String prefix = "留言（" + title + "）：";
+        String sql = "SELECT n.*, u.nickname AS sender_nickname FROM notification n JOIN app_user u ON u.id=n.sender_id " +
+                "WHERE n.activity_id=? AND n.type='留言' AND n.event_key NOT LIKE 'msg-reply:%' ";
+        var rows = senderId == null
+                ? jdbc.queryForList(sql + "ORDER BY n.created_at, n.id", activityId)
+                : jdbc.queryForList(sql + "AND n.sender_id=? ORDER BY n.created_at, n.id", activityId, senderId);
         for (var row : rows) {
+            String content = (String) row.get("content");
+            if (content != null && content.startsWith(prefix)) {
+                row.put("content", content.substring(prefix.length()));
+            }
             long mid = ((Number) row.get("id")).longValue();
             var replies = jdbc.queryForList(
                     "SELECT content, created_at FROM notification WHERE event_key LIKE ? ORDER BY id LIMIT 1",
@@ -580,6 +610,17 @@ public class BuddyService {
         notifyWithSender(senderId, activityId, null, "留言", content.trim(),
                 "msg-reply:" + messageId + ":" + LocalDateTime.now(), organizerId);
         return Map.of("ok", true);
+    }
+
+    /** 任务 3（2026-11-10，P1）：详情人数公开计数——未登录也能看 formal/reserved/waiting
+     *  （SRS §3.3.2.2 详情字段清单本就含正式/候补人数）；不含名单、联系方式与本人状态。 */
+    public Map<String, Object> publicCounts(long activityId) {
+        LocalDateTime now = LocalDateTime.now();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("formal", formalCount(activityId));
+        out.put("reserved", reservedCount(activityId, now));
+        out.put("waiting", waitingCount(activityId));
+        return out;
     }
 
     public Map<String, Object> detail(long activityId, long userId) {
