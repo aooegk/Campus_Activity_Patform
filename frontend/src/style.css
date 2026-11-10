@@ -234,6 +234,10 @@ section.card.publish-form .dt-row { max-width: none; }
 .login input { display: block; width: 100%; max-width: 360px; box-sizing: border-box; margin: 6px 0; }
 .login .field-label { max-width: 360px; }
 .login button { margin-top: 8px; }
+/* 登录页（2026-11-10，单独一页）：内容居中收窄，横幅 + 欢迎语 + 表单卡 */
+.login-page { max-width: 560px; margin: 0 auto; }
+.login-welcome { margin: 14px 0 4px; font-size: 1.35rem; }
+.login-sub { margin: 0 0 14px; }
 /* 发布表单：标签在上、输入框在下，窄屏不溢出 */
 section.card label { display: block; margin: 14px 0; color: var(--ink); font-size: 15px; font-weight: 600; }
 section.card label input, section.card label select {

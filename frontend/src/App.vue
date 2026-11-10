@@ -2,9 +2,9 @@
   <header>
     <img class="logo" src="/img/logo.webp" alt="找个搭子" />
     <h1>找个搭子</h1>
-    <button class="menu-btn" @click="menuOpen = !menuOpen" :aria-expanded="menuOpen">☰ 菜单</button>
-    <button class="ghost theme-btn" @click="toggleTheme" :aria-pressed="darkMode"><span class="theme-icon">{{ darkMode ? '☀️' : '🌙' }}</span><span class="theme-label">{{ darkMode ? ' 浅色模式' : ' 深色模式' }}</span></button>
-    <nav :class="{open: menuOpen}">
+    <button v-if="user" class="menu-btn" @click="menuOpen = !menuOpen" :aria-expanded="menuOpen">☰ 菜单</button>
+    <button v-if="user" class="ghost theme-btn" @click="toggleTheme" :aria-pressed="darkMode"><span class="theme-icon">{{ darkMode ? '☀️' : '🌙' }}</span><span class="theme-label">{{ darkMode ? ' 浅色模式' : ' 深色模式' }}</span></button>
+    <nav v-if="user" :class="{open: menuOpen}">
       <button :class="{active: view==='hall'}" @click="go('hall')">活动大厅</button>
       <button :class="{active: view==='my'}" @click="go('my')">我的活动</button>
       <button :class="{active: view==='notif'}" @click="go('notif')">通知<span v-if="unread">（{{ unread }} 未读）</span></button>
@@ -22,7 +22,11 @@
     <div v-if="msg" class="msg">{{ msg }}<button class="msg-close" @click="msg=''" aria-label="关闭提示">×</button></div>
     <div v-if="withdrawNotice" class="msg withdraw-notice"><b>已退出{{ withdrawNotice.title ? '活动「' + withdrawNotice.title + '」' : '' }}。</b>手抖点错了？<button class="primary" @click="resignupFromNotice"><b>点这里重新报名</b></button></div>
 
-    <section v-if="!user" class="card login">
+    <section v-if="!user" class="login-page">
+      <div class="hero-banner"><img src="/img/hero.webp" alt="找个搭子：一起打球、玩桌游、学习" /></div>
+      <h2 class="login-welcome">欢迎来到找个搭子</h2>
+      <p class="meta login-sub">登录或注册后，即可查看活动、报名参加，也可以自己发布活动。</p>
+      <div class="card login">
       <h3>登录 / 注册新账号</h3>
       <label class="field-label" for="login-account">账号</label>
       <input id="login-account" v-model="account" placeholder="账号" autocomplete="username" />
@@ -45,9 +49,10 @@
       <p class="hint">手机 App 才填后端地址，如 http://192.168.1.5:8080；网页 / PWA 留空，用当前地址。</p>
       <p class="hint">演示账号密码均为 123456，也可注册新账号。</p>
       <p class="hint">{{ seedHint }}</p>
+      </div>
     </section>
 
-    <section v-if="view==='hall'">
+    <section v-if="user && view==='hall'">
       <div class="hero-banner"><img src="/img/hero.webp" alt="找个搭子：一起打球、玩桌游、学习" /></div>
       <div class="card">
         <input v-model="q" placeholder="按活动名称、介绍、条件、地点搜索" />
@@ -69,7 +74,31 @@
         <p>{{ loadError }}</p>
         <button class="primary" @click="retryHall">重新加载</button>
       </div>
-      <div v-if="detail" class="card detail-card" ref="detailCard">
+      <div v-if="!hallLoading && !loadError && !filteredHall.length" class="card empty-state">
+        <div class="card-cover"><img src="/img/hero.webp" alt="" /></div>
+        <p>{{ emptyHint }}</p>
+        <p v-if="q">要不要自己发一个？</p>
+        <button v-if="q" class="primary" @click="goPublishWithQuery">去发活动</button>
+      </div>
+      <div v-for="a in filteredHall" :key="a.id" class="card">
+        <div class="card-cover"><img :src="coverImg(a.id)" alt="" loading="lazy" /></div>
+        <div class="card-head">
+          <h3 class="card-title" @click="openDetail(a.id)">{{ a.title }} <span class="activity-no">#{{ a.id }}</span> <span v-if="isNewToday(a)" class="badge badge-accent">新发布</span> <span v-if="isFull(a)" class="badge badge-full">已满员</span> <span v-if="a.status && a.status !== 'OPEN'" class="badge badge-full">{{ statusLabel(a) }}</span></h3>
+          <canvas class="cap-ring" width="112" height="112" :data-formal="a.formal_count" :data-cap="a.capacity" role="img" :aria-label="'正式 ' + a.formal_count + '/' + a.capacity + ' 人'"></canvas>
+        </div>
+        <p>
+          <span class="badge">{{ a.category }}</span><span class="badge">{{ a.location }}</span>
+          <span v-if="isFull(a) && (a.reserved_count ?? 0) > 0" class="badge badge-big">已占满（正式 {{ a.formal_count }} + 预留 {{ a.reserved_count }}）</span>
+          <span v-else class="badge badge-big">正式 {{ a.formal_count }}/{{ a.capacity }}</span>
+        </p>
+        <p class="meta card-meta"><span class="nowrap">开始：{{ fmtWeek(a.start_time) }}</span>　<span class="nowrap">组织者：{{ a.organizer_name }}</span></p>
+        <button @click="openDetail(a.id)">{{ cardButtonText(a) }}</button>
+      </div>
+    </section>
+
+    <section v-if="user && view==='detail'">
+      <button class="ghost" @click="go(detailFrom)">← 返回{{ detailFrom === 'my' ? '我的活动' : '活动大厅' }}</button>
+      <div v-if="detail" class="card detail-card">
         <div class="card-cover detail-cover"><img :src="coverImg(detail.activity_id || detail.id)" alt="" /></div>
         <div class="card-head">
           <h3>详情：{{ detail.title }} <span class="activity-no">#{{ detail.activity_id || detail.id }}</span> <span v-if="detail.status && detail.status !== 'OPEN'" class="badge badge-full">{{ statusLabel(detail) }}</span></h3>
@@ -82,16 +111,7 @@
         <p class="info-line"><span class="info-label">组织者</span><b>{{ detail.organizer_name }}</b></p>
         <p class="info-line"><span class="info-label">报名截止</span><b><span class="nowrap">{{ fmtWeek(detail.deadline) }}</span></b><span v-if="detail.status !== 'CANCELLED'">　{{ deadlineCountdown(detail) }}</span></p>
         <p v-if="detail.formal !== undefined && detail.formal !== null && detail.reserved !== undefined && detail.waiting !== undefined" class="info-line"><span class="info-label">名额</span><b>正式 {{ detail.formal }}/{{ detail.capacity }}　预留 {{ detail.reserved }}　候补 {{ detail.waiting }}</b><span v-if="isFull(detail)">　已满员</span></p>
-        <p v-if="detail.reserved > 0" class="hint">预留是指已发出递补邀请、待对方确认的名额；对方确认后转为正式，过期则顺延给下一位候补。</p>
-        <details class="term-help">
-          <summary>术语解释：候补 / 递补 / 预留 / 正式成员</summary>
-          <p class="hint">正式成员：已占一个名额，可以参加活动。</p>
-          <p class="hint">候补：名额满了，先排队；有人退出时按顺序递补。</p>
-          <p class="hint">递补：有人退出空出名额时，按候补顺序邀请下一位参加。</p>
-          <p class="hint">预留：已发出递补邀请、等对方确认的名额；对方确认后转为正式，过期则顺延给下一位候补。</p>
-        </details>
         <p v-if="detail.my_status" class="info-line"><span class="info-label">我的状态</span><b>{{ statusText(detail.my_status) }}<span v-if="detail.my_rank">，候补第 {{ detail.my_rank }} 名</span><span v-if="detail.invitation_expires_at">，请在 <span class="nowrap">{{ fmtWeek(detail.invitation_expires_at) }}</span> 前确认</span></b></p>
-        <p v-if="detail.status === 'CANCELLED'" class="info-line"><b>该活动已取消</b></p>
         <template v-if="user && detail.status !== 'CANCELLED' && (!detail.my_status || ['WITHDRAWN','EXPIRED','CANCELLED'].includes(detail.my_status))">
           <button v-if="canSignup(detail)" class="primary" :disabled="signupBusy" @click="signup(detail.activity_id || detail.id)">{{ signupBusy ? '提交中…' : (isFull(detail) ? '报名候补' : '报名') }}</button>
           <button v-else class="primary" disabled>{{ signupDisabledReason(detail) }}</button>
@@ -103,6 +123,15 @@
         <p v-if="user && detail.invitation_id" class="hint">拒绝后将退出候补队列，如需再排队请重新报名。</p>
         <button v-if="user && detail.invitation_id && inviteSecondsLeft(detail.invitation_expires_at) !== null" class="primary" @click="accept(detail.invitation_id)">接受递补</button>
         <button v-if="user && detail.invitation_id && inviteSecondsLeft(detail.invitation_expires_at) !== null" class="warn" @click="reject(detail.invitation_id)">拒绝递补</button>
+        <p v-if="detail.reserved > 0" class="hint">预留是指已发出递补邀请、待对方确认的名额；对方确认后转为正式，过期则顺延给下一位候补。</p>
+        <details class="term-help">
+          <summary>术语解释：候补 / 递补 / 预留 / 正式成员</summary>
+          <p class="hint">正式成员：已占一个名额，可以参加活动。</p>
+          <p class="hint">候补：名额满了，先排队；有人退出时按顺序递补。</p>
+          <p class="hint">递补：有人退出空出名额时，按候补顺序邀请下一位参加。</p>
+          <p class="hint">预留：已发出递补邀请、等对方确认的名额；对方确认后转为正式，过期则顺延给下一位候补。</p>
+        </details>
+        <p v-if="detail.status === 'CANCELLED'" class="info-line"><b>该活动已取消</b></p>
         <div v-if="user && detail.status !== 'CANCELLED' && !detail.roster" class="message-box">
           <label class="field-label" for="message-draft">给组织者留言</label>
           <input id="message-draft" v-model="messageDraft" placeholder="如：请问场地有电梯吗？" maxlength="200" />
@@ -155,32 +184,9 @@
           </div>
         </div>
       </div>
-      <div v-if="!hallLoading && !loadError && !filteredHall.length" class="card empty-state">
-        <div class="card-cover"><img src="/img/hero.webp" alt="" /></div>
-        <p>{{ emptyHint }}</p>
-        <p v-if="q">要不要自己发一个？</p>
-        <button v-if="q" class="primary" @click="goPublishWithQuery">去发活动</button>
-      </div>
-      <div v-for="a in filteredHall" :key="a.id" class="card">
-        <div class="card-cover"><img :src="coverImg(a.id)" alt="" loading="lazy" /></div>
-        <div class="card-head">
-          <h3 class="card-title" @click="openDetail(a.id)">{{ a.title }} <span class="activity-no">#{{ a.id }}</span> <span v-if="isNewToday(a)" class="badge badge-accent">新发布</span> <span v-if="isFull(a)" class="badge badge-full">已满员</span> <span v-if="a.status && a.status !== 'OPEN'" class="badge badge-full">{{ statusLabel(a) }}</span></h3>
-          <canvas class="cap-ring" width="112" height="112" :data-formal="a.formal_count" :data-cap="a.capacity" role="img" :aria-label="'正式 ' + a.formal_count + '/' + a.capacity + ' 人'"></canvas>
-        </div>
-        <p>
-          <span class="badge">{{ a.category }}</span><span class="badge">{{ a.location }}</span>
-          <span v-if="isFull(a) && (a.reserved_count ?? 0) > 0" class="badge badge-big">已占满（正式 {{ a.formal_count }} + 预留 {{ a.reserved_count }}）</span>
-          <span v-else class="badge badge-big">正式 {{ a.formal_count }}/{{ a.capacity }}</span>
-          <span v-if="(a.reserved_count ?? 0) > 0 && !isFull(a)" class="badge">预留 {{ a.reserved_count }}</span><span class="badge">候补 {{ a.waiting_count }} 人</span>
-          <span class="badge badge-accent" v-if="a.my_status">我的状态：{{ statusText(a.my_status) }}</span>
-        </p>
-        <p class="meta card-meta"><span class="nowrap">报名截止：{{ fmtWeek(a.deadline) }}</span>　<span class="nowrap">开始：{{ fmtWeek(a.start_time) }}</span>　<span class="nowrap">组织者：{{ a.organizer_name }}</span></p>
-        <p v-if="a.status !== 'CANCELLED'" class="meta card-meta"><span class="nowrap">{{ deadlineCountdown(a) }}</span></p>
-        <button @click="openDetail(a.id)">{{ cardButtonText(a) }}</button>
-      </div>
     </section>
 
-    <section v-if="view==='my'">
+    <section v-if="user && view==='my'">
       <div class="tabs" role="tablist">
         <button :class="{active: myTab==='signed'}" @click="myTab='signed'">已报名</button>
         <button :class="{active: myTab==='waiting'}" @click="myTab='waiting'">候补</button>
@@ -198,14 +204,14 @@
       </div>
       <div v-if="myTab==='organized'">
         <div v-for="o in organized" :key="'org-' + o.id" class="card">
-          <h3 class="card-title" @click="go('hall'); openDetail(o.id)">{{ o.title }} <span class="activity-no">#{{ o.id }}</span></h3>
+          <h3 class="card-title" @click="openDetail(o.id)">{{ o.title }} <span class="activity-no">#{{ o.id }}</span></h3>
           <p>
             <span class="badge">{{ o.category }}</span><span class="badge">{{ o.location }}</span>
             <span class="badge badge-big">正式 {{ o.formal_count }}/{{ o.capacity }}</span>
             <span class="badge">预留 {{ o.reserved_count }}</span><span class="badge">候补 {{ o.waiting_count }} 人</span>
           </p>
           <p class="meta card-meta"><span class="nowrap">报名截止：{{ fmtWeek(o.deadline) }}</span>　<span class="nowrap">开始：{{ fmtWeek(o.start_time) }}</span>　状态：{{ o.status }}</p>
-          <button @click="go('hall'); openDetail(o.id)">查看详情</button>
+          <button @click="openDetail(o.id)">查看详情</button>
           <button v-if="o.status !== 'CANCELLED'" @click="openRoster(o.id)">查看名单</button>
         </div>
         <p v-if="!organized.length" class="meta">暂无组织的活动。</p>
@@ -227,7 +233,7 @@
       </div>
     </section>
 
-    <section v-if="view==='roster'" class="card">
+    <section v-if="user && view==='roster'" class="card">
       <h3>名单：{{ rosterActivity ? rosterActivity.title : '' }}</h3>
       <button class="ghost" @click="go('my')">← 返回我的活动</button>
       <p v-if="rosterError" class="meta">{{ rosterError }}</p>
@@ -259,7 +265,7 @@
       </div>
     </section>
 
-    <section v-if="view==='notif'">
+    <section v-if="user && view==='notif'">
       <button @click="readAll">全部标为已读</button>
       <div v-for="g in groupedNotifs" :key="g.key" class="card notif-row" :class="{'notif-unread': !g.latest.read_at}">
         <p><b>{{ notifTypeText(g.latest.type) }}</b>　{{ g.latest.content }}</p>
@@ -274,7 +280,7 @@
       <p v-if="!groupedNotifs.length" class="meta">暂无通知。</p>
     </section>
 
-    <section v-if="view==='publish'" class="card publish-form">
+    <section v-if="user && view==='publish'" class="card publish-form">
       <h3>发布活动</h3>
       <label>标题 <input v-model="form.title" placeholder="如：羽毛球友谊赛" /><span v-if="titleWeekdayHint" class="field-hint warn-hint">{{ titleWeekdayHint }}</span></label>
       <label>类别
@@ -298,7 +304,7 @@
       <label>参与条件 <input v-model="form.conditions" placeholder="如：水平不限，免费参加；新人友好；场地有电梯" /></label>
       <button class="primary" :disabled="publishBusy" @click="publish">{{ publishBusy ? '提交中…' : '发布' }}</button>
     </section>
-    <footer v-if="demoMode" class="page-foot">
+    <footer v-if="user && demoMode" class="page-foot">
       <button class="danger" @click="resetDemo">⚠ 恢复演示数据</button>
       <span class="hint">危险操作：会清空当前业务数据并恢复种子数据，仅演示时使用。</span>
       <button class="ghost" @click="exitDemoMode">退出演示模式</button>
@@ -328,6 +334,8 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 const view = ref('hall')
+// 详情页从哪来（大厅 / 我的活动），返回时回到原地（2026-11-10 详情独立页）。
+const detailFrom = ref('hall')
 const menuOpen = ref(false)
 const myTab = ref('signed')
 const hallLoading = ref(false)
@@ -336,7 +344,6 @@ const loginBusy = ref(false)
 const registerBusy = ref(false)
 const signupBusy = ref(false)
 const publishBusy = ref(false)
-const detailCard = ref(null)
 const user = ref(null)
 const token = ref(localStorage.getItem('token') || '')
 const account = ref(''), password = ref('123456'), nickname = ref('')
@@ -774,6 +781,8 @@ async function login() {
   try {
     const j = await api('/api/login', 'POST', { account: account.value, password: password.value })
     token.value = j.token; localStorage.setItem('token', j.token); user.value = j.user; msg.value = '登录成功'
+    // 登录页是单独一页：登录成功后进大厅（2026-11-10 游客不看内容）。
+    view.value = 'hall'
     // 任务 18：登录成功横幅 5 秒后自动消失（另有 × 可随时关闭）；其他提示条不受影响。
     setTimeout(() => { if (msg.value === '登录成功') msg.value = '' }, 5000)
     // 任务 3（换号串号）：先清掉上一个账号的缓存状态，再拉当前账号的；
@@ -875,13 +884,17 @@ async function loadHall() {
 async function retryHall() { loadHall() }
 async function openDetail(id) {
   try {
+    // 记录从哪来（大厅 / 我的活动），详情页返回时回到原地。
+    if (view.value !== 'detail') detailFrom.value = view.value === 'my' ? 'my' : 'hall'
     detail.value = await api('/api/activities/' + id); msg.value = ''
     // 任务 17（2026-11-10）：非组织者视角拉取本人发过的留言及组织者回复；
     // 组织者走名单视图的全部留言，不拉此接口。
     if (user.value && !detail.value.roster) loadMyMessages(id); else myMessages.value = []
-    // 任务 6：详情卡片在列表上方、当前视口之外时，自动滚动到详情顶部。
+    // 详情是独立页（2026-11-10）：切过去并回到页顶，不再在列表里原地展开、
+    // 不再跳到列表最上方——之前 scrollIntoView 就是用户说的“跳到第一个”。
+    view.value = 'detail'
     await nextTick()
-    detailCard.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    window.scrollTo(0, 0)
     drawCapRings()
   } catch (e) { msg.value = friendlyErr(e) }
 }
@@ -1081,7 +1094,8 @@ watch(nowTick, () => {
     // sweep 每 10 秒跑一次，12 秒后再拉一次，把已顺延的 EXPIRED 状态也刷回来。
     setTimeout(() => loadMy(), 12000)
   }
-  if (detail.value && detail.value.invitation_id && detail.value.invitation_expires_at
+  // 详情页的邀请过期才刷新详情（2026-11-10：openDetail 会切到详情页，不在详情页时别把用户拽过去）。
+  if (view.value === 'detail' && detail.value && detail.value.invitation_id && detail.value.invitation_expires_at
     && parseShanghai(detail.value.invitation_expires_at) <= nowTick.value
     && !expiredRefreshed.value.has('detail-' + (detail.value.activity_id || detail.value.id))) {
     expiredRefreshed.value.add('detail-' + (detail.value.activity_id || detail.value.id))
@@ -1097,10 +1111,13 @@ onMounted(async () => {
   if (new URLSearchParams(location.search).get('demo') === '1') {
     demoMode.value = true; localStorage.setItem('demoMode', '1')
   }
-  loadHall()
-  // 任务 3：刷新页面带 token 恢复登录时，未读数也要立即是当前账号的，
-  // 不能等到手动点「通知」才刷。
-  if (token.value) { try { const j = await api('/api/me'); user.value = j.user; loadNotif() } catch { logout() } }
+  // 未登录只见登录页，不拉大厅数据；带 token 才恢复登录并拉大厅（2026-11-10）。
+  if (token.value) {
+    loadHall()
+    // 任务 3：刷新页面带 token 恢复登录时，未读数也要立即是当前账号的，
+    // 不能等到手动点「通知」才刷。
+    try { const j = await api('/api/me'); user.value = j.user; loadNotif() } catch { logout() }
+  }
 })
 onUnmounted(() => { if (tickTimer) clearInterval(tickTimer) })
 </script>
