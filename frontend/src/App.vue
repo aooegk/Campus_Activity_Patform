@@ -44,9 +44,11 @@
       </select>
       <button class="ghost" @click="quick(quickAccount)">以该身份进入（演示）</button>
       <p class="hint">账号可自定（建议用学号），没有学号也可以注册。</p>
+      <template v-if="isCapacitor">
       <label class="field-label" for="login-apibase">后端地址（仅手机 App 用）</label>
       <input id="login-apibase" v-model="apiBase" placeholder="后端地址" @change="saveApiBase" />
       <p class="hint">手机 App 才填后端地址，如 http://192.168.1.5:8080；网页 / PWA 留空，用当前地址。</p>
+      </template>
       <p class="hint">演示账号密码均为 123456，也可注册新账号。</p>
       <p class="hint">{{ seedHint }}</p>
       </div>
@@ -390,6 +392,9 @@ let tickTimer = null
 const headers = () => token.value ? { 'Authorization': 'Bearer ' + token.value, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' }
 // 手机原生 App 用：后端不在本机时，在此填电脑地址（如 http://192.168.1.5:8080），留空则用当前页面地址（网页/PWA 默认）
 const apiBase = ref(localStorage.getItem('apiBase') || '')
+// 后端地址只在 Capacitor 原生 App 里才需要（页面不在服务器上，相对 /api/ 走不通，
+// 须指明后端地址）；网页 / PWA 与后端同源，默认就是当前地址，不用填也不显示（2026-11-10 用户问）。
+const isCapacitor = ref(typeof window !== 'undefined' && !!window.Capacitor)
 function saveApiBase() { localStorage.setItem('apiBase', apiBase.value.trim()) }
 async function api(path, method = 'GET', body) {
   const r = await fetch((apiBase.value.trim().replace(/\/$/, '') || '') + path, { method, headers: headers(), body: body ? JSON.stringify(body) : undefined })
