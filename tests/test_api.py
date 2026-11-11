@@ -21,10 +21,12 @@ def check(name, cond, detail=""):
     results.append((name, bool(cond), detail))
     print(("PASS" if cond else "FAIL"), "-", name, detail)
 
-def req(method, path, token=None, body=None):
+def req(method, path, token=None, body=None, key=None):
     r = urllib.request.Request(BASE + path, method=method,
         data=json.dumps(body).encode() if body is not None else None,
-        headers={"Content-Type": "application/json", **({"Authorization": "Bearer " + token} if token else {})})
+        headers={"Content-Type": "application/json",
+                 **({"Authorization": "Bearer " + token} if token else {}),
+                 **({"Idempotency-Key": key} if key is not None else {})})
     try:
         with urllib.request.urlopen(r) as resp:
             return json.loads(resp.read())

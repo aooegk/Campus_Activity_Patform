@@ -408,7 +408,21 @@ const apiBase = ref(localStorage.getItem('apiBase') || '')
 const isCapacitor = ref(typeof window !== 'undefined' && !!window.Capacitor)
 function saveApiBase() { localStorage.setItem('apiBase', apiBase.value.trim()) }
 async function api(path, method = 'GET', body) {
-  const r = await fetch((apiBase.value.trim().replace(/\/$/, '') || '') + path, { method, headers: headers(), body: body ? JSON.stringify(body) : undefined })
+  const url = apiBase.value.trim().replace(/\/$/, '') + path
+  const options = { method, headers: headers(), body: body ? JSON.stringify(body) : undefined }
+  const replayable = (method === 'PUT' && /^\/api\/activities\/\d+$/.test(path))
+    || (method === 'POST' && /^\/api\/(?:activities(?:\/\d+\/(?:signup|cancel|reschedule))?|participations\/\d+\/withdraw|invitations\/\d+\/(?:accept|reject))$/.test(path))
+  if (replayable) {
+    const bytes = crypto.getRandomValues(new Uint8Array(16))
+    options.headers['Idempotency-Key'] = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
+  }
+  let r
+  try {
+    r = await fetch(url, options)
+  } catch (error) {
+    if (!replayable) throw error
+    r = await fetch(url, options)
+  }
   const j = await r.json().catch(() => ({}))
   if (!r.ok) {
     const error = new Error(j.error || ('请求失败 ' + r.status))

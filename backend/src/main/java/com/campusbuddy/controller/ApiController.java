@@ -3,6 +3,7 @@ package com.campusbuddy.controller;
 import com.campusbuddy.model.ActivityFields;
 import com.campusbuddy.service.AuthService;
 import com.campusbuddy.service.BuddyService;
+import com.campusbuddy.service.CommandReceipts;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
@@ -27,13 +28,15 @@ public class ApiController {
     private final JdbcTemplate jdbc;
     private final AuthService auth;
     private final BuddyService buddy;
+    private final CommandReceipts receipts;
     private final boolean demoEnabled;
 
-    public ApiController(JdbcTemplate jdbc, AuthService auth, BuddyService buddy,
+    public ApiController(JdbcTemplate jdbc, AuthService auth, BuddyService buddy, CommandReceipts receipts,
                          @Value("${app.demo-enabled:false}") boolean demoEnabled) {
         this.jdbc = jdbc;
         this.auth = auth;
         this.buddy = buddy;
+        this.receipts = receipts;
         this.demoEnabled = demoEnabled;
     }
 
@@ -199,9 +202,14 @@ public class ApiController {
     }
 
     @PostMapping("/activities")
-    public Map<String, Object> create(@RequestBody Map<String, Object> body,
-            @RequestHeader(value = "Authorization", required = false) String h) {
+    public ResponseEntity<Map<String, Object>> create(@RequestBody Map<String, Object> body,
+            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key) {
         long me = require(h);
+        return receipts.execute(me, key, "POST /activities", body, () -> ResponseEntity.ok(createActivity(me, body)));
+    }
+
+    private Map<String, Object> createActivity(long me, Map<String, Object> body) {
         ActivityFields fields = ActivityFields.from(body);
         fields.validateTime(LocalDateTime.now());
         KeyHolder keyHolder = new GeneratedKeyHolder();
@@ -227,37 +235,43 @@ public class ApiController {
     }
 
     @PostMapping("/activities/{id}/cancel")
-    public Map<String, Object> cancel(@PathVariable long id,
-            @RequestHeader(value = "Authorization", required = false) String h) {
-        // 任务 1（2026-11-09）：取消逻辑与取消通知都在 BuddyService.cancelActivity
-        // 内完成（SDD §6.8：取消通知所有受影响成员）；二次取消幂等，不重发通知。
-        return buddy.cancelActivity(id, require(h));
+    public ResponseEntity<Map<String, Object>> cancel(@PathVariable long id,
+            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+        long me = require(h);
+        return receipts.execute(me, key, "POST /activities/" + id + "/cancel", null,
+                () -> ResponseEntity.ok(buddy.cancelActivity(id, me)));
     }
 
     @PutMapping("/activities/{id}")
     public ResponseEntity<Map<String, Object>> updateActivity(@PathVariable long id,
             @RequestBody Map<String, Object> body,
-            @RequestHeader(value = "Authorization", required = false) String h) {
+            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key) {
         long me = require(h);
-        long version;
-        try {
-            version = Long.parseLong(String.valueOf(body.get("version")));
-        } catch (NumberFormatException e) {
-            throw new IllegalStateException("缺少有效活动版本，请刷新详情");
-        }
-        var result = buddy.updateActivity(id, me, version, ActivityFields.from(body), ActivityFields.reason(body));
-        return Boolean.FALSE.equals(result.get("ok"))
-                ? ResponseEntity.status(HttpStatus.CONFLICT).body(result)
-                : ResponseEntity.ok(result);
+        return receipts.execute(me, key, "PUT /activities/" + id, body, () -> {
+            long version;
+            try {
+                version = Long.parseLong(String.valueOf(body.get("version")));
+            } catch (NumberFormatException e) {
+                throw new IllegalStateException("缺少有效活动版本，请刷新详情");
+            }
+            var result = buddy.updateActivity(id, me, version, ActivityFields.from(body), ActivityFields.reason(body));
+            return Boolean.FALSE.equals(result.get("ok"))
+                    ? ResponseEntity.status(HttpStatus.CONFLICT).body(result)
+                    : ResponseEntity.ok(result);
+        });
     }
 
     @PostMapping("/activities/{id}/reschedule")
-    public Map<String, Object> reschedule(@PathVariable long id,
+    public ResponseEntity<Map<String, Object>> reschedule(@PathVariable long id,
             @RequestBody Map<String, Object> body,
-            @RequestHeader(value = "Authorization", required = false) String h) {
+            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key) {
         long me = require(h);
-        return buddy.reschedule(id, me, ActivityFields.time(body, "deadline"),
-                ActivityFields.time(body, "start_time"), ActivityFields.time(body, "end_time"));
+        return receipts.execute(me, key, "POST /activities/" + id + "/reschedule", body,
+                () -> ResponseEntity.ok(buddy.reschedule(id, me, ActivityFields.time(body, "deadline"),
+                        ActivityFields.time(body, "start_time"), ActivityFields.time(body, "end_time"))));
     }
 
     // 任务 9（2026-11-09）：站内留言——详情页「给组织者留言」，登录用户报名前后均可。
@@ -291,27 +305,39 @@ public class ApiController {
 
     // ---- 报名 / 退出 / 递补 ----
     @PostMapping("/activities/{id}/signup")
-    public Map<String, Object> signup(@PathVariable long id,
-            @RequestHeader(value = "Authorization", required = false) String h) {
-        return buddy.signup(id, require(h));
+    public ResponseEntity<Map<String, Object>> signup(@PathVariable long id,
+            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+        long me = require(h);
+        return receipts.execute(me, key, "POST /activities/" + id + "/signup", null,
+                () -> ResponseEntity.ok(buddy.signup(id, me)));
     }
 
     @PostMapping("/participations/{id}/withdraw")
-    public Map<String, Object> withdraw(@PathVariable long id,
-            @RequestHeader(value = "Authorization", required = false) String h) {
-        return buddy.withdraw(id, require(h));
+    public ResponseEntity<Map<String, Object>> withdraw(@PathVariable long id,
+            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+        long me = require(h);
+        return receipts.execute(me, key, "POST /participations/" + id + "/withdraw", null,
+                () -> ResponseEntity.ok(buddy.withdraw(id, me)));
     }
 
     @PostMapping("/invitations/{id}/accept")
     public ResponseEntity<Map<String, Object>> accept(@PathVariable long id,
-            @RequestHeader(value = "Authorization", required = false) String h) {
-        return invitationResponse(buddy.respondInvitation(id, require(h), true), "ACCEPTED");
+            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+        long me = require(h);
+        return receipts.execute(me, key, "POST /invitations/" + id + "/accept", null,
+                () -> invitationResponse(buddy.respondInvitation(id, me, true), "ACCEPTED"));
     }
 
     @PostMapping("/invitations/{id}/reject")
     public ResponseEntity<Map<String, Object>> reject(@PathVariable long id,
-            @RequestHeader(value = "Authorization", required = false) String h) {
-        return invitationResponse(buddy.respondInvitation(id, require(h), false), "REJECTED");
+            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestHeader(value = "Idempotency-Key", required = false) String key) {
+        long me = require(h);
+        return receipts.execute(me, key, "POST /invitations/" + id + "/reject", null,
+                () -> invitationResponse(buddy.respondInvitation(id, me, false), "REJECTED"));
     }
 
     private ResponseEntity<Map<String, Object>> invitationResponse(Map<String, Object> result, String expected) {
@@ -379,6 +405,7 @@ public class ApiController {
         if (!demoEnabled) return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
                 "ok", false, "error", "演示重置未启用"));
         require(h);
+        jdbc.update("DELETE FROM operation_receipt");
         jdbc.update("DELETE FROM feedback");
         jdbc.update("DELETE FROM notification");
         jdbc.update("DELETE FROM invitation");

@@ -100,6 +100,8 @@ POST /activities/{id}/signup、POST /participations/{id}/withdraw；
 POST /invitations/{id}/accept、/reject；
 GET /my、GET /notifications、POST /notifications/read-all、POST /demo/reset（仅演示）。
 
+活动及参与的写请求可附加 `Idempotency-Key`。回执按账号和请求键保存，在业务事务内记录已提交响应。相同键对应不同请求时返回 HTTP 409。
+
 ### 2.6 技术选型理由
 Vue 3 + Vite：单页应用、构建产物小（约 79 KB JS），可直接打包进 Jar；
 Spring Boot 3 + JdbcTemplate：事务与定时任务开箱即用，SQL 可控，适合把约束写进数据库；

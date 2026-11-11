@@ -83,3 +83,14 @@ CREATE TABLE IF NOT EXISTS feedback (
     content          VARCHAR(500) NOT NULL DEFAULT '' CHECK (char_length(content) <= 500),
     created_at       TIMESTAMP NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS operation_receipt (
+    user_id         BIGINT NOT NULL,
+    key_hash        CHAR(64) NOT NULL,
+    request_hash    CHAR(64) NOT NULL,
+    response_status INTEGER,
+    response_body   TEXT,
+    created_at      TIMESTAMP NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, key_hash),
+    FOREIGN KEY (user_id) REFERENCES app_user(id)
+);
