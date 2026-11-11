@@ -13,10 +13,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.util.HexFormat;
 import java.util.Map;
 import java.util.function.Supplier;
 
@@ -48,8 +44,8 @@ public class CommandReceipts {
             throw new IllegalStateException("Idempotency-Key 需为 1-128 个可见 ASCII 字符");
 
         try {
-            String keyHash = sha256(key);
-            String requestHash = sha256(command + "\n" + canonicalJson.writeValueAsString(body));
+            String keyHash = AuthService.digest(key);
+            String requestHash = AuthService.digest(command + "\n" + canonicalJson.writeValueAsString(body));
             jdbc.update(reserveReceipt, userId, keyHash, requestHash);
             var receipt = jdbc.queryForMap(
                     "SELECT request_hash, response_status, response_body FROM operation_receipt " +
@@ -73,12 +69,4 @@ public class CommandReceipts {
         }
     }
 
-    private String sha256(String value) {
-        try {
-            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(digest);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("无法初始化请求摘要", e);
-        }
-    }
 }

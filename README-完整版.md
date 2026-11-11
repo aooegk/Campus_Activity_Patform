@@ -58,3 +58,5 @@ Maven 走阿里云镜像，npm 走 npmmirror；前端打包进后端 Jar，不�
 仅在独立的演示或测试数据库上设置 `DEMO_ENABLED=true`。开启后，空库会初始化演示账号和活动，登录后可使用恢复入口。网页加 `?demo=1` 显示演示页脚。默认关闭种子数据和重置接口。
 
 运行 `tests/test_api.py` 或 `tests/test_full_flow.py` 前，在测试后端设置 `INVITE_TTL=10`、`SWEEP_SECONDS=2`、`INVITE_DAY_START_HOUR=0` 和 `INVITE_DAY_END_HOUR=24`。通过 `BASE_URL` 指向测试后端。这两份测试会重置该库的演示数据。
+
+公网部署使用 HTTPS，并设置 `SESSION_SECURE=true`。浏览器会话通过 HttpOnly Cookie 保存，原生 App 继续使用 Bearer 令牌。

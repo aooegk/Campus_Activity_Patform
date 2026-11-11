@@ -94,3 +94,20 @@ CREATE TABLE IF NOT EXISTS operation_receipt (
     PRIMARY KEY (user_id, key_hash),
     FOREIGN KEY (user_id) REFERENCES app_user(id)
 );
+
+CREATE TABLE IF NOT EXISTS login_attempt (
+    user_id      BIGINT PRIMARY KEY,
+    failed_count INTEGER NOT NULL,
+    locked_until TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES app_user(id)
+);
+
+CREATE TABLE IF NOT EXISTS auth_session (
+    token_hash CHAR(64) PRIMARY KEY,
+    user_id    BIGINT NOT NULL,
+    csrf_hash  CHAR(64) NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    idle_until TIMESTAMP NOT NULL,
+    FOREIGN KEY (user_id) REFERENCES app_user(id)
+);
+CREATE INDEX IF NOT EXISTS idx_auth_session_user ON auth_session(user_id);

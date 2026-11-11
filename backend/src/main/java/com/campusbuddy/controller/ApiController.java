@@ -4,8 +4,12 @@ import com.campusbuddy.model.ActivityFields;
 import com.campusbuddy.service.AuthService;
 import com.campusbuddy.service.BuddyService;
 import com.campusbuddy.service.CommandReceipts;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.ResponseCookie;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -13,12 +17,12 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.sql.PreparedStatement;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
 
@@ -30,24 +34,27 @@ public class ApiController {
     private final BuddyService buddy;
     private final CommandReceipts receipts;
     private final boolean demoEnabled;
+    private final boolean secureSessionCookie;
 
     public ApiController(JdbcTemplate jdbc, AuthService auth, BuddyService buddy, CommandReceipts receipts,
-                         @Value("${app.demo-enabled:false}") boolean demoEnabled) {
+                         @Value("${app.demo-enabled:false}") boolean demoEnabled,
+                         @Value("${app.secure-session-cookie:false}") boolean secureSessionCookie) {
         this.jdbc = jdbc;
         this.auth = auth;
         this.buddy = buddy;
         this.receipts = receipts;
         this.demoEnabled = demoEnabled;
+        this.secureSessionCookie = secureSessionCookie;
     }
 
-    private Long require(String authHeader) {
-        Long id = auth.userId(authHeader);
-        if (id == null) throw new IllegalStateException("未登录");
-        // 停用账号的旧 token 不能再操作：登录时拦停用只是第一道关，
-        // token 发出后被停用的账号必须在每次鉴权时再查一次状态。
-        var user = auth.me(id);
-        if (!"ACTIVE".equals(user.get("status"))) throw new IllegalStateException("账号已停用");
-        return id;
+    private long require(Long actor) {
+        if (actor == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "未登录或会话已失效");
+        return actor;
+    }
+
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> handleStatus(ResponseStatusException e) {
+        return ResponseEntity.status(e.getStatusCode()).body(Map.of("ok", false, "error", e.getReason()));
     }
 
     @ExceptionHandler(IllegalStateException.class)
@@ -74,11 +81,29 @@ public class ApiController {
 
     // ---- 账号 ----
     @PostMapping("/login")
-    public Map<String, Object> login(@RequestBody Map<String, String> body) {
-        String token = auth.login(body.get("account"), body.get("password"));
-        if (token == null) throw new IllegalStateException("账号或密码错误");
-        Long id = auth.userId("Bearer " + token);
-        return Map.of("ok", true, "token", token, "user", auth.me(id));
+    public ResponseEntity<Map<String, Object>> login(@RequestBody Map<String, String> body, HttpServletRequest request) {
+        AuthService.LoginSession session = auth.login(body.get("account"), body.get("password"));
+        if (session == null) throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "账号或密码错误，或账号暂时锁定");
+        return withSessionCookies(request, session.token(), session.csrf(), AuthService.SESSION_LIFETIME)
+                .body(Map.of("ok", true, "token", session.token(), "user", auth.me(session.userId())));
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<Map<String, Object>> logout(HttpServletRequest request,
+            @RequestAttribute(value = SessionFilter.TOKEN, required = false) String token) {
+        auth.logout(token);
+        return withSessionCookies(request, "", "", Duration.ZERO).body(Map.of("ok", true));
+    }
+
+    private ResponseEntity.BodyBuilder withSessionCookies(HttpServletRequest request, String token, String csrf,
+                                                           Duration lifetime) {
+        boolean secure = secureSessionCookie || request.isSecure();
+        ResponseCookie sessionCookie = ResponseCookie.from(SessionFilter.SESSION_COOKIE, token)
+                .path("/api").httpOnly(true).secure(secure).sameSite("Lax").maxAge(lifetime).build();
+        ResponseCookie csrfCookie = ResponseCookie.from(SessionFilter.CSRF_COOKIE, csrf)
+                .path("/").secure(secure).sameSite("Lax").maxAge(lifetime).build();
+        return ResponseEntity.ok().header(HttpHeaders.SET_COOKIE, sessionCookie.toString(), csrfCookie.toString())
+                .header(HttpHeaders.CACHE_CONTROL, "no-store");
     }
 
     @PostMapping("/register")
@@ -86,50 +111,43 @@ public class ApiController {
         String account = body.get("account"), password = body.get("password");
         if (account == null || account.length() < 4 || account.length() > 32)
             throw new IllegalStateException("账号需为 4-32 字符");
-        if (password == null || password.length() < 6)
-            throw new IllegalStateException("密码至少 6 位");
-        // 旧代码不校验昵称长度，超长时数据库 CHECK 报错被 catch 全吞，
-        // 统一误报为“账号已存在”。先校验，再按异常原因区分报错。
+        if (demoEnabled) {
+            if (password == null || password.length() < 6 || password.length() > 64)
+                throw new IllegalStateException("密码需为 6–64 位");
+        } else {
+            AuthService.validatePassword(password);
+        }
         String nickname = body.get("nickname");
-        if (nickname == null || nickname.isBlank()) nickname = account;
-        if (nickname.codePointCount(0, nickname.length()) < 1 || nickname.codePointCount(0, nickname.length()) > 30)
+        if (nickname == null || nickname.isBlank()) {
+            int end = account.offsetByCodePoints(0, Math.min(30, account.codePointCount(0, account.length())));
+            nickname = account.substring(0, end);
+        }
+        if (nickname.codePointCount(0, nickname.length()) > 30)
             throw new IllegalStateException("昵称需为 1-30 字");
         try {
             jdbc.update("INSERT INTO app_user(account, password_hash, nickname) VALUES (?,?,?)",
                     account, AuthService.hash(password), nickname);
-        } catch (Exception e) {
-            // 只有唯一约束冲突才是“账号已存在”，其他数据库错误不再冒充它。
-            Throwable t = e;
-            while (t != null) {
-                String m = t.getMessage();
-                // PostgreSQL 唯一冲突文案是 "duplicate key"，MySQL 是 "Duplicate entry ..."，
-                // 统一按小写匹配，两库重复注册都报“账号已存在”。
-                if (m != null) {
-                    String lower = m.toLowerCase();
-                    if (lower.contains("duplicate key") || lower.contains("duplicate entry"))
-                        throw new IllegalStateException("账号已存在");
-                }
-                t = t.getCause();
-            }
-            throw new IllegalStateException("注册失败，请重试");
+        } catch (DuplicateKeyException e) {
+            throw new IllegalStateException("账号已存在");
         }
         return Map.of("ok", true);
     }
 
     @GetMapping("/me")
-    public Map<String, Object> me(@RequestHeader(value = "Authorization", required = false) String h) {
-        return Map.of("ok", true, "user", auth.me(require(h)));
+    public Map<String, Object> me(@RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        return Map.of("ok", true, "user", auth.me(require(actor)));
     }
 
     // 任务 10（2026-11-09）：改密码。登录态，传原密码 + 新密码；校验原密码、
     // 新密码符合 SDD 规则（8–64 位、含字母与数字）后更新散列并撤销全部旧会话
     // token（含当前 token，改完须重新登录）。注册接口不动。
     @PostMapping("/me/password")
-    public Map<String, Object> changePassword(@RequestBody Map<String, String> body,
-            @RequestHeader(value = "Authorization", required = false) String h) {
-        long me = require(h);
+    public ResponseEntity<Map<String, Object>> changePassword(@RequestBody Map<String, String> body,
+            HttpServletRequest request,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        long me = require(actor);
         auth.changePassword(me, body.get("old_password"), body.get("new_password"));
-        return Map.of("ok", true);
+        return withSessionCookies(request, "", "", Duration.ZERO).body(Map.of("ok", true));
     }
 
     // ---- 活动大厅 ----
@@ -137,14 +155,8 @@ public class ApiController {
     public List<Map<String, Object>> activities(
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String category,
-            @RequestHeader(value = "Authorization", required = false) String h) {
-        Long me = auth.userId(h);
-        // 停用账号只读大厅时也不再带上本人状态，避免旧 token 在只读路径上仍被当作有效身份。
-        if (me != null) {
-            try {
-                if (!"ACTIVE".equals(auth.me(me).get("status"))) me = null;
-            } catch (Exception e) { me = null; }
-        }
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        Long me = actor;
         Timestamp now = Timestamp.valueOf(LocalDateTime.now());
         String sql = "SELECT a.*, u.nickname AS organizer_name, " +
                 "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='FORMAL') AS formal_count, " +
@@ -176,9 +188,8 @@ public class ApiController {
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     @GetMapping("/activities/{id}")
     public Map<String, Object> activityDetail(@PathVariable long id,
-            @RequestHeader(value = "Authorization", required = false) String h) {
-        Long me = auth.userId(h);
-        if (me != null && !"ACTIVE".equals(auth.me(me).get("status"))) me = null;
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        Long me = actor;
         var act = jdbc.queryForMap("SELECT a.*, u.nickname AS organizer_name FROM activity a " +
                 "JOIN app_user u ON u.id=a.organizer_id WHERE a.id=?", id);
         Map<String, Object> out = new LinkedHashMap<>(act);
@@ -203,9 +214,9 @@ public class ApiController {
 
     @PostMapping("/activities")
     public ResponseEntity<Map<String, Object>> create(@RequestBody Map<String, Object> body,
-            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor,
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-        long me = require(h);
+        long me = require(actor);
         return receipts.execute(me, key, "POST /activities", body, () -> ResponseEntity.ok(createActivity(me, body)));
     }
 
@@ -236,9 +247,9 @@ public class ApiController {
 
     @PostMapping("/activities/{id}/cancel")
     public ResponseEntity<Map<String, Object>> cancel(@PathVariable long id,
-            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor,
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-        long me = require(h);
+        long me = require(actor);
         return receipts.execute(me, key, "POST /activities/" + id + "/cancel", null,
                 () -> ResponseEntity.ok(buddy.cancelActivity(id, me)));
     }
@@ -246,9 +257,9 @@ public class ApiController {
     @PutMapping("/activities/{id}")
     public ResponseEntity<Map<String, Object>> updateActivity(@PathVariable long id,
             @RequestBody Map<String, Object> body,
-            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor,
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-        long me = require(h);
+        long me = require(actor);
         return receipts.execute(me, key, "PUT /activities/" + id, body, () -> {
             long version;
             try {
@@ -266,9 +277,9 @@ public class ApiController {
     @PostMapping("/activities/{id}/reschedule")
     public ResponseEntity<Map<String, Object>> reschedule(@PathVariable long id,
             @RequestBody Map<String, Object> body,
-            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor,
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-        long me = require(h);
+        long me = require(actor);
         return receipts.execute(me, key, "POST /activities/" + id + "/reschedule", body,
                 () -> ResponseEntity.ok(buddy.reschedule(id, me, ActivityFields.time(body, "deadline"),
                         ActivityFields.time(body, "start_time"), ActivityFields.time(body, "end_time"))));
@@ -278,16 +289,16 @@ public class ApiController {
     @PostMapping("/activities/{id}/messages")
     public Map<String, Object> postMessage(@PathVariable long id,
             @RequestBody Map<String, String> body,
-            @RequestHeader(value = "Authorization", required = false) String h) {
-        return buddy.postMessage(id, require(h), body.get("content"));
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        return buddy.postMessage(id, require(actor), body.get("content"));
     }
 
     // 任务 17（2026-11-10）：留言查询接口——组织者看全部留言，本人只看自己发过的
     // （各附组织者回复）；他人留言不可见。详情页「我发过的留言」区用此接口。
     @GetMapping("/activities/{id}/messages")
     public List<Map<String, Object>> messages(@PathVariable long id,
-            @RequestHeader(value = "Authorization", required = false) String h) {
-        long me = require(h);
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        long me = require(actor);
         var act = jdbc.queryForMap("SELECT organizer_id FROM activity WHERE id=?", id);
         if (Objects.equals(((Number) act.get("organizer_id")).longValue(), me)) {
             return buddy.listMessages(id);
@@ -299,43 +310,43 @@ public class ApiController {
     @PostMapping("/activities/{id}/messages/{mid}/reply")
     public Map<String, Object> replyMessage(@PathVariable long id, @PathVariable long mid,
             @RequestBody Map<String, String> body,
-            @RequestHeader(value = "Authorization", required = false) String h) {
-        return buddy.replyMessage(id, require(h), mid, body.get("content"));
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        return buddy.replyMessage(id, require(actor), mid, body.get("content"));
     }
 
     // ---- 报名 / 退出 / 递补 ----
     @PostMapping("/activities/{id}/signup")
     public ResponseEntity<Map<String, Object>> signup(@PathVariable long id,
-            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor,
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-        long me = require(h);
+        long me = require(actor);
         return receipts.execute(me, key, "POST /activities/" + id + "/signup", null,
                 () -> ResponseEntity.ok(buddy.signup(id, me)));
     }
 
     @PostMapping("/participations/{id}/withdraw")
     public ResponseEntity<Map<String, Object>> withdraw(@PathVariable long id,
-            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor,
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-        long me = require(h);
+        long me = require(actor);
         return receipts.execute(me, key, "POST /participations/" + id + "/withdraw", null,
                 () -> ResponseEntity.ok(buddy.withdraw(id, me)));
     }
 
     @PostMapping("/invitations/{id}/accept")
     public ResponseEntity<Map<String, Object>> accept(@PathVariable long id,
-            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor,
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-        long me = require(h);
+        long me = require(actor);
         return receipts.execute(me, key, "POST /invitations/" + id + "/accept", null,
                 () -> invitationResponse(buddy.respondInvitation(id, me, true), "ACCEPTED"));
     }
 
     @PostMapping("/invitations/{id}/reject")
     public ResponseEntity<Map<String, Object>> reject(@PathVariable long id,
-            @RequestHeader(value = "Authorization", required = false) String h,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor,
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
-        long me = require(h);
+        long me = require(actor);
         return receipts.execute(me, key, "POST /invitations/" + id + "/reject", null,
                 () -> invitationResponse(buddy.respondInvitation(id, me, false), "REJECTED"));
     }
@@ -350,8 +361,8 @@ public class ApiController {
 
     // ---- 我的活动 / 通知 ----
     @GetMapping("/my")
-    public List<Map<String, Object>> my(@RequestHeader(value = "Authorization", required = false) String h) {
-        long me = require(h);
+    public List<Map<String, Object>> my(@RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        long me = require(actor);
         Timestamp now = Timestamp.valueOf(LocalDateTime.now());
         return jdbc.queryForList(
                 "SELECT p.*, a.title, a.location, a.capacity, a.start_time, a.deadline, " +
@@ -364,8 +375,8 @@ public class ApiController {
     // 任务 2：我组织的活动（带正式/候补/预留人数）。新接口，不改 /api/my 的返回形状
     // （测试与前端都按列表使用它），苏晴在前端另调此接口渲染「我组织的」一栏。
     @GetMapping("/my/organized")
-    public List<Map<String, Object>> myOrganized(@RequestHeader(value = "Authorization", required = false) String h) {
-        long me = require(h);
+    public List<Map<String, Object>> myOrganized(@RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        long me = require(actor);
         return jdbc.queryForList(
                 "SELECT a.*, " +
                 "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='FORMAL') AS formal_count, " +
@@ -377,8 +388,8 @@ public class ApiController {
     }
 
     @GetMapping("/notifications")
-    public Map<String, Object> notifications(@RequestHeader(value = "Authorization", required = false) String h) {
-        long me = require(h);
+    public Map<String, Object> notifications(@RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        long me = require(actor);
         // 任务 4 配合（2026-11-10）：邀请通知附加 expires_at（LEFT JOIN invitation），
         // 前端倒计时优先用该字段，解析通知文案为兜底；非邀请类通知该字段为 null。
         // invitation 表无 created_at 列，ORDER BY created_at 无歧义。
@@ -391,8 +402,8 @@ public class ApiController {
     }
 
     @PostMapping("/notifications/read-all")
-    public Map<String, Object> readAll(@RequestHeader(value = "Authorization", required = false) String h) {
-        long me = require(h);
+    public Map<String, Object> readAll(@RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        long me = require(actor);
         jdbc.update("UPDATE notification SET read_at=? WHERE user_id=? AND read_at IS NULL",
                 Timestamp.valueOf(LocalDateTime.now()), me);
         return Map.of("ok", true);
@@ -401,10 +412,12 @@ public class ApiController {
     // 只在显式开启的演示环境提供数据重置。
     @Transactional
     @PostMapping("/demo/reset")
-    public ResponseEntity<Map<String, Object>> reset(@RequestHeader(value = "Authorization", required = false) String h) {
+    public ResponseEntity<Map<String, Object>> reset(HttpServletRequest request, @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
         if (!demoEnabled) return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
                 "ok", false, "error", "演示重置未启用"));
-        require(h);
+        require(actor);
+        jdbc.update("DELETE FROM auth_session");
+        jdbc.update("DELETE FROM login_attempt");
         jdbc.update("DELETE FROM operation_receipt");
         jdbc.update("DELETE FROM feedback");
         jdbc.update("DELETE FROM notification");
@@ -413,12 +426,6 @@ public class ApiController {
         jdbc.update("DELETE FROM activity");
         jdbc.update("DELETE FROM app_user");
         new com.campusbuddy.service.SeedRunner(jdbc).run();
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                auth.clearSessions();
-            }
-        });
-        return ResponseEntity.ok(Map.of("ok", true));
+        return withSessionCookies(request, "", "", Duration.ZERO).body(Map.of("ok", true));
     }
 }

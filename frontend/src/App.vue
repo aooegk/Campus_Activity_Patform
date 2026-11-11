@@ -36,21 +36,21 @@
       <input id="login-nickname" v-model="nickname" placeholder="昵称（仅注册时用）" />
       <button class="primary" :disabled="loginBusy" @click="login">{{ loginBusy ? '提交中…' : '登录' }}</button>
       <button class="ghost" :disabled="registerBusy" @click="register">{{ registerBusy ? '提交中…' : '注册新账号' }}</button>
-      <label class="field-label" for="quick-account">演示：以以下身份进入</label>
-      <select id="quick-account" v-model="quickAccount" aria-label="演示账号选择">
+      <label v-if="demoEnabled" class="field-label" for="quick-account">演示：以以下身份进入</label>
+      <select v-if="demoEnabled" id="quick-account" v-model="quickAccount" aria-label="演示账号选择">
         <option value="organizer">组织者</option>
         <option value="demo01">同学1</option>
         <option value="demo05">同学5（桌游候补）</option>
       </select>
-      <button class="ghost" @click="quick(quickAccount)">以该身份进入（演示）</button>
+      <button v-if="demoEnabled" class="ghost" @click="quick(quickAccount)">以该身份进入（演示）</button>
       <p class="hint">账号可自定（建议用学号），没有学号也可以注册。</p>
       <template v-if="isCapacitor">
       <label class="field-label" for="login-apibase">后端地址（仅手机 App 用）</label>
       <input id="login-apibase" v-model="apiBase" placeholder="后端地址" @change="saveApiBase" />
       <p class="hint">手机 App 才填后端地址，如 http://192.168.1.5:8080；网页 / PWA 留空，用当前地址。</p>
       </template>
-      <p class="hint">演示账号密码均为 123456，也可注册新账号。</p>
-      <p class="hint">{{ seedHint }}</p>
+      <p v-if="demoEnabled" class="hint">演示账号密码均为 123456，也可注册新账号。</p>
+      <p v-if="demoEnabled" class="hint">{{ seedHint }}</p>
       </div>
     </section>
 
@@ -357,7 +357,7 @@ const signupBusy = ref(false)
 const publishBusy = ref(false)
 const user = ref(null)
 const token = ref(localStorage.getItem('token') || '')
-const account = ref(''), password = ref('123456'), nickname = ref('')
+const account = ref(''), password = ref(''), nickname = ref('')
 const msg = ref('')
 const hall = ref([]), detail = ref(null), mine = ref([]), organized = ref([]), notifs = ref([]), unread = ref(0)
 const q = ref(''), category = ref(''), timeSlot = ref('')
@@ -406,10 +406,28 @@ const apiBase = ref(localStorage.getItem('apiBase') || '')
 // 后端地址只在 Capacitor 原生 App 里才需要（页面不在服务器上，相对 /api/ 走不通，
 // 须指明后端地址）；网页 / PWA 与后端同源，默认就是当前地址，不用填也不显示（2026-11-10 用户问）。
 const isCapacitor = ref(typeof window !== 'undefined' && !!window.Capacitor)
-function saveApiBase() { localStorage.setItem('apiBase', apiBase.value.trim()) }
+function saveApiBase() {
+  localStorage.setItem('apiBase', apiBase.value.trim())
+  loadDemoStatus()
+}
+async function loadDemoStatus() {
+  try { demoEnabled.value = (await api('/api/health')).demo_enabled === true }
+  catch { demoEnabled.value = false }
+}
+function csrfCookie() {
+  const entry = document.cookie.split(';').map(part => part.trim()).find(part => part.startsWith('campus_csrf='))
+  return entry ? entry.slice('campus_csrf='.length) : ''
+}
+function hasSession() {
+  return !!token.value || (!isCapacitor.value && !!csrfCookie())
+}
 async function api(path, method = 'GET', body) {
-  const url = apiBase.value.trim().replace(/\/$/, '') + path
+  const url = (isCapacitor.value ? apiBase.value.trim().replace(/\/$/, '') : '') + path
   const options = { method, headers: headers(), body: body ? JSON.stringify(body) : undefined }
+  if (!isCapacitor.value && !token.value && method !== 'GET') {
+    const csrf = csrfCookie()
+    if (csrf) options.headers['X-CSRF-Token'] = csrf
+  }
   const replayable = (method === 'PUT' && /^\/api\/activities\/\d+$/.test(path))
     || (method === 'POST' && /^\/api\/(?:activities(?:\/\d+\/(?:signup|cancel|reschedule))?|participations\/\d+\/withdraw|invitations\/\d+\/(?:accept|reject))$/.test(path))
   if (replayable) {
@@ -818,7 +836,17 @@ async function login() {
   loginBusy.value = true
   try {
     const j = await api('/api/login', 'POST', { account: account.value, password: password.value })
-    token.value = j.token; localStorage.setItem('token', j.token); user.value = j.user; msg.value = '登录成功'
+    if (isCapacitor.value) {
+      token.value = j.token
+      localStorage.setItem('token', j.token)
+    } else {
+      token.value = ''
+      localStorage.removeItem('token')
+      if (!csrfCookie()) throw new Error('浏览器未保存会话 Cookie，请检查站点和 HTTPS 设置')
+    }
+    user.value = j.user
+    password.value = ''
+    msg.value = '登录成功'
     // 登录页是单独一页：登录成功后进大厅（2026-11-10 游客不看内容）。
     view.value = 'hall'
     // 任务 18：登录成功横幅 5 秒后自动消失（另有 × 可随时关闭）；其他提示条不受影响。
@@ -835,7 +863,7 @@ async function register() {
   if (registerBusy.value) return
   registerBusy.value = true
   try {
-    await api('/api/register', 'POST', { account: account.value, password: password.value, nickname: nickname.value || account.value })
+    await api('/api/register', 'POST', { account: account.value, password: password.value, nickname: nickname.value })
     await login()
     // 任务 5：login() 会把提示写成「登录成功」；注册路径须保留「注册成功」。
     // 任务 18：注册成功横幅同样 5 秒后自动消失。
@@ -876,7 +904,21 @@ async function resignupFromNotice() {
 // 未读数、我的活动（我报名的 + 我组织的）、详情页（含 my_status /
 // 组织者名单，均属当前账号视角）。登录成功后、退出时、token 失效时都走这里。
 function clearAccountState() { mine.value = []; organized.value = []; notifs.value = []; unread.value = 0; detail.value = null; myMessages.value = []; withdrawNotice.value = null; rosterActivity.value = null; rosterError.value = '' }
-function logout() { token.value = ''; localStorage.removeItem('token'); user.value = null; clearAccountState(); view.value = 'hall' }
+function clearSessionState() {
+  token.value = ''
+  localStorage.removeItem('token')
+  user.value = null
+  clearAccountState()
+  view.value = 'hall'
+}
+async function logout() {
+  try {
+    await api('/api/logout', 'POST')
+    clearSessionState()
+  } catch (e) {
+    msg.value = friendlyErr(e)
+  }
+}
 // UI 配图（2026-11-10，用户定：用通用配图，不按分类配专用图——专用图使用场景有限）。
 // 3 张通用封面按活动 id 轮换，与分类无关；横幅与空状态共用 hero。
 function coverImg(id) {
@@ -941,7 +983,7 @@ async function openDetail(id) {
 }
 // 任务 17（2026-11-10）：GET /api/activities/{id}/messages，本人只返回自己的留言。
 async function loadMyMessages(id) {
-  if (!token.value) { myMessages.value = []; return }
+  if (!hasSession()) { myMessages.value = []; return }
   try { myMessages.value = await api('/api/activities/' + id + '/messages') } catch (_) { myMessages.value = [] }
 }
 async function signup(id) {
@@ -1127,15 +1169,14 @@ async function changePassword() {
     await api('/api/me/password', 'POST', { old_password: pwForm.value.oldPw, new_password: pwForm.value.newPw })
     pwForm.value = { oldPw: '', newPw: '' }
     msg.value = '密码已修改，请重新登录'
-    token.value = ''; localStorage.removeItem('token'); user.value = null
-    clearAccountState(); view.value = 'hall'
+    clearSessionState()
   } catch (e) { msg.value = friendlyErr(e) } finally { pwBusy.value = false }
 }
 async function resetDemo() {
   if (!confirm('确认恢复演示数据吗？当前业务数据会被清空。')) return
   try {
     await api('/api/demo/reset', 'POST')
-    logout()
+    clearSessionState()
     msg.value = '演示数据已恢复，请重新登录'
   } catch (e) {
     msg.value = e.message
@@ -1176,15 +1217,12 @@ onMounted(async () => {
   if (new URLSearchParams(location.search).get('demo') === '1') {
     demoMode.value = true; localStorage.setItem('demoMode', '1')
   }
-  if (demoMode.value) {
-    api('/api/health').then(health => { demoEnabled.value = health.demo_enabled === true }).catch(() => {})
-  }
-  // 未登录只见登录页，不拉大厅数据；带 token 才恢复登录并拉大厅（2026-11-10）。
-  if (token.value) {
+  loadDemoStatus()
+  if (hasSession()) {
     loadHall()
     // 任务 3：刷新页面带 token 恢复登录时，未读数也要立即是当前账号的，
     // 不能等到手动点「通知」才刷。
-    try { const j = await api('/api/me'); user.value = j.user; loadNotif() } catch { logout() }
+    try { const j = await api('/api/me'); user.value = j.user; loadNotif() } catch { clearSessionState() }
   }
 })
 onUnmounted(() => { if (tickTimer) clearInterval(tickTimer) })

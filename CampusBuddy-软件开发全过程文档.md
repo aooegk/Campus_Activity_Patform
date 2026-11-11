@@ -92,7 +92,7 @@ PostgreSQL 16（6 张表，见 2.2）
 - 通知去重：事件键由业务事件 + 用户 + 时间构成，唯一约束兜底。
 
 ### 2.5 接口清单（统一前缀 /api，错误统一 `{ok:false,error}`）
-GET /health；POST /login、/register；GET /me；
+GET /health；POST /login、/logout、/register；GET /me；
 GET /activities（q、category 过滤，带正式 / 候补 / 预留计数与本人状态）；
 GET /activities/{id}（返回活动版本，组织者额外取得名单与待确认邀请）；
 POST /activities、PUT /activities/{id}（携带 version 与修改原因）、POST /activities/{id}/cancel；
@@ -147,7 +147,7 @@ C“周末学习组”上限 10（2 正式）。时间均为相对启动时刻 +
   截止时间一致。
 
 ### 3.5 已知局限（不回避）
-- 会话为演示级内存 token，未做持久化与刷新；生产需换 JWT / 服务端会话 + HTTPS。
+- 浏览器使用持久化 Cookie 会话，写请求携带 CSRF 令牌。移动端兼容 Bearer 令牌。公网部署需使用 HTTPS，并配置 `SESSION_SECURE=true`。
 - 无分页：大厅与通知各取全量 / 前 50 条，演示规模够用。
 - 无管理后台与评价接口（P2），表已预留，属后续工作。
 - 演示重置接口 `/demo/reset` 默认关闭。仅对独立演示库配置 `DEMO_ENABLED=true`，登录后可重置。

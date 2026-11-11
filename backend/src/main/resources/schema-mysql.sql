@@ -97,3 +97,20 @@ CREATE TABLE IF NOT EXISTS operation_receipt (
     PRIMARY KEY (user_id, key_hash),
     FOREIGN KEY (user_id) REFERENCES app_user(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS login_attempt (
+    user_id      BIGINT PRIMARY KEY,
+    failed_count INTEGER NOT NULL,
+    locked_until DATETIME(6),
+    FOREIGN KEY (user_id) REFERENCES app_user(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS auth_session (
+    token_hash CHAR(64) PRIMARY KEY,
+    user_id    BIGINT NOT NULL,
+    csrf_hash  CHAR(64) NOT NULL,
+    expires_at DATETIME(6) NOT NULL,
+    idle_until DATETIME(6) NOT NULL,
+    INDEX idx_auth_session_user (user_id),
+    FOREIGN KEY (user_id) REFERENCES app_user(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
