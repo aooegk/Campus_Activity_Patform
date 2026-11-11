@@ -2,13 +2,17 @@ package com.campusbuddy.controller;
 
 import com.campusbuddy.service.AuthService;
 import com.campusbuddy.service.BuddyService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.bind.annotation.*;
 
 import java.sql.PreparedStatement;
@@ -22,21 +26,14 @@ public class ApiController {
     private final JdbcTemplate jdbc;
     private final AuthService auth;
     private final BuddyService buddy;
-    /** 启动时从 DataSource 取数据库产品名判断一次并缓存：与 BuddyService 同一做法，
-     *  仅用于 /demo/reset 的自增序列重置分支。 */
-    private final boolean mysql;
+    private final boolean demoEnabled;
 
-    public ApiController(JdbcTemplate jdbc, AuthService auth, BuddyService buddy) {
-        this.jdbc = jdbc; this.auth = auth; this.buddy = buddy;
-        this.mysql = detectMysql(jdbc);
-    }
-
-    private static boolean detectMysql(JdbcTemplate jdbc) {
-        try (var con = jdbc.getDataSource().getConnection()) {
-            return con.getMetaData().getDatabaseProductName().toLowerCase().contains("mysql");
-        } catch (Exception e) {
-            throw new IllegalStateException("无法识别数据库产品", e);
-        }
+    public ApiController(JdbcTemplate jdbc, AuthService auth, BuddyService buddy,
+                         @Value("${app.demo-enabled:false}") boolean demoEnabled) {
+        this.jdbc = jdbc;
+        this.auth = auth;
+        this.buddy = buddy;
+        this.demoEnabled = demoEnabled;
     }
 
     private Long require(String authHeader) {
@@ -66,7 +63,7 @@ public class ApiController {
     @GetMapping("/health")
     public Map<String, Object> health() {
         return Map.of("ok", true, "server_time", LocalDateTime.now().toString(),
-                "invite_ttl_seconds", buddy.inviteTtlSeconds(),
+                "invite_ttl_seconds", buddy.inviteTtlSeconds(), "demo_enabled", demoEnabled,
                 "users", jdbc.queryForObject("SELECT COUNT(*) FROM app_user", Integer.class),
                 "activities", jdbc.queryForObject("SELECT COUNT(*) FROM activity", Integer.class));
     }
@@ -144,35 +141,40 @@ public class ApiController {
                 if (!"ACTIVE".equals(auth.me(me).get("status"))) me = null;
             } catch (Exception e) { me = null; }
         }
-        // 任务 9（2026-11-10）：大厅默认不列已取消活动；/my 与 /my/organized 不动。
+        Timestamp now = Timestamp.valueOf(LocalDateTime.now());
         String sql = "SELECT a.*, u.nickname AS organizer_name, " +
                 "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='FORMAL') AS formal_count, " +
                 "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='WAITING') AS waiting_count, " +
                 "(SELECT COUNT(*) FROM invitation i JOIN participation p ON p.id=i.participation_id " +
-                " WHERE p.activity_id=a.id AND i.status='PENDING' AND i.expires_at > now()) AS reserved_count " +
-                "FROM activity a JOIN app_user u ON u.id=a.organizer_id WHERE 1=1 AND a.status <> 'CANCELLED' ";
+                "WHERE p.activity_id=a.id AND i.status='PENDING' AND i.expires_at > ?) AS reserved_count";
         List<Object> args = new ArrayList<>();
-        if (q != null && !q.isBlank()) { sql += "AND a.title LIKE ? "; args.add("%" + q.trim() + "%"); }
-        if (category != null && !category.isBlank() && !"全部".equals(category)) {
-            sql += "AND a.category = ? "; args.add(category);
-        }
-        sql += "ORDER BY a.start_time, a.id";
-        var rows = jdbc.queryForList(sql, args.toArray());
+        args.add(now);
+        if (me != null) sql += ", mine.status AS my_status";
+        sql += " FROM activity a JOIN app_user u ON u.id=a.organizer_id ";
         if (me != null) {
-            for (var row : rows) {
-                var mine = jdbc.queryForList(
-                        "SELECT status FROM participation WHERE activity_id=? AND user_id=?",
-                        row.get("id"), me);
-                row.put("my_status", mine.isEmpty() ? null : mine.get(0).get("status"));
-            }
+            sql += "LEFT JOIN participation mine ON mine.activity_id=a.id AND mine.user_id=? ";
+            args.add(me);
         }
-        return rows;
+        sql += "WHERE a.status NOT IN ('CANCELLED','ENDED') AND a.end_time > ? ";
+        args.add(now);
+        if (q != null && !q.isBlank()) {
+            sql += "AND a.title LIKE ? ";
+            args.add("%" + q.trim() + "%");
+        }
+        if (category != null && !category.isBlank() && !"全部".equals(category)) {
+            sql += "AND a.category = ? ";
+            args.add(category);
+        }
+        sql += "ORDER BY a.created_at DESC, a.id DESC";
+        return jdbc.queryForList(sql, args.toArray());
     }
 
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     @GetMapping("/activities/{id}")
     public Map<String, Object> activityDetail(@PathVariable long id,
             @RequestHeader(value = "Authorization", required = false) String h) {
         Long me = auth.userId(h);
+        if (me != null && !"ACTIVE".equals(auth.me(me).get("status"))) me = null;
         var act = jdbc.queryForMap("SELECT a.*, u.nickname AS organizer_name FROM activity a " +
                 "JOIN app_user u ON u.id=a.organizer_id WHERE a.id=?", id);
         Map<String, Object> out = new LinkedHashMap<>(act);
@@ -187,7 +189,8 @@ public class ApiController {
                     "ORDER BY CASE p.status WHEN 'FORMAL' THEN 0 WHEN 'INVITED' THEN 1 ELSE 2 END, p.queued_at, p.id", id));
             out.put("pending_invitations", jdbc.queryForList(
                     "SELECT i.*, u.nickname FROM invitation i JOIN participation p ON p.id=i.participation_id " +
-                    "JOIN app_user u ON u.id=p.user_id WHERE p.activity_id=? AND i.status='PENDING' ORDER BY i.expires_at", id));
+                    "JOIN app_user u ON u.id=p.user_id WHERE p.activity_id=? AND i.status='PENDING' AND i.expires_at > ? ORDER BY i.expires_at",
+                    id, Timestamp.valueOf(LocalDateTime.now())));
             // 任务 9（2026-11-09）：站内留言只在组织者视角返回，不上公开详情页。
             out.put("messages", buddy.listMessages(id));
         }
@@ -264,7 +267,6 @@ public class ApiController {
         return Map.of("ok", true, "id", id);
     }
 
-    @Transactional
     @PostMapping("/activities/{id}/cancel")
     public Map<String, Object> cancel(@PathVariable long id,
             @RequestHeader(value = "Authorization", required = false) String h) {
@@ -335,27 +337,36 @@ public class ApiController {
     }
 
     @PostMapping("/invitations/{id}/accept")
-    public Map<String, Object> accept(@PathVariable long id,
+    public ResponseEntity<Map<String, Object>> accept(@PathVariable long id,
             @RequestHeader(value = "Authorization", required = false) String h) {
-        return buddy.respondInvitation(id, require(h), true);
+        return invitationResponse(buddy.respondInvitation(id, require(h), true), "ACCEPTED");
     }
 
     @PostMapping("/invitations/{id}/reject")
-    public Map<String, Object> reject(@PathVariable long id,
+    public ResponseEntity<Map<String, Object>> reject(@PathVariable long id,
             @RequestHeader(value = "Authorization", required = false) String h) {
-        return buddy.respondInvitation(id, require(h), false);
+        return invitationResponse(buddy.respondInvitation(id, require(h), false), "REJECTED");
+    }
+
+    private ResponseEntity<Map<String, Object>> invitationResponse(Map<String, Object> result, String expected) {
+        String status = (String) result.get("invitation_status");
+        if (status == null || expected.equals(status)) return ResponseEntity.ok(result);
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
+                "ok", false, "invitation_status", status,
+                "error", "EXPIRED".equals(status) ? "邀请已过期" : "该邀请已处理，无法再次操作"));
     }
 
     // ---- 我的活动 / 通知 ----
     @GetMapping("/my")
     public List<Map<String, Object>> my(@RequestHeader(value = "Authorization", required = false) String h) {
         long me = require(h);
+        Timestamp now = Timestamp.valueOf(LocalDateTime.now());
         return jdbc.queryForList(
                 "SELECT p.*, a.title, a.location, a.capacity, a.start_time, a.deadline, " +
-                "(SELECT i.id FROM invitation i WHERE i.participation_id=p.id AND i.status='PENDING' ORDER BY i.id DESC LIMIT 1) AS invitation_id, " +
-                "(SELECT i.expires_at FROM invitation i WHERE i.participation_id=p.id AND i.status='PENDING' ORDER BY i.id DESC LIMIT 1) AS invitation_expires_at " +
+                "(SELECT i.id FROM invitation i WHERE i.participation_id=p.id AND i.status='PENDING' AND i.expires_at > ? ORDER BY i.id DESC LIMIT 1) AS invitation_id, " +
+                "(SELECT i.expires_at FROM invitation i WHERE i.participation_id=p.id AND i.status='PENDING' AND i.expires_at > ? ORDER BY i.id DESC LIMIT 1) AS invitation_expires_at " +
                 "FROM participation p JOIN activity a ON a.id=p.activity_id WHERE p.user_id=? " +
-                "ORDER BY p.updated_at DESC", me);
+                "ORDER BY p.updated_at DESC", now, now, me);
     }
 
     // 任务 2：我组织的活动（带正式/候补/预留人数）。新接口，不改 /api/my 的返回形状
@@ -368,8 +379,9 @@ public class ApiController {
                 "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='FORMAL') AS formal_count, " +
                 "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='WAITING') AS waiting_count, " +
                 "(SELECT COUNT(*) FROM invitation i JOIN participation p ON p.id=i.participation_id " +
-                " WHERE p.activity_id=a.id AND i.status='PENDING' AND i.expires_at > now()) AS reserved_count " +
-                "FROM activity a WHERE a.organizer_id=? ORDER BY a.start_time, a.id", me);
+                " WHERE p.activity_id=a.id AND i.status='PENDING' AND i.expires_at > ?) AS reserved_count " +
+                "FROM activity a WHERE a.organizer_id=? ORDER BY a.start_time, a.id",
+                Timestamp.valueOf(LocalDateTime.now()), me);
     }
 
     @GetMapping("/notifications")
@@ -394,13 +406,12 @@ public class ApiController {
         return Map.of("ok", true);
     }
 
-    // ---- 演示重置（仅演示用）：清空业务数据并恢复种子 ----
-    // 修复前：无需任何登录即可调用，且不清空内存会话。序列重启后新注册用户
-    // 会复用旧用户的 id，旧 token 不经任何校验就能冒用新用户（已复现）。
-    // 修复后：必须登录才能重置；种子写入成功后清空全部会话；删除 + 种子在同一事务内。
+    // 只在显式开启的演示环境提供数据重置。
     @Transactional
     @PostMapping("/demo/reset")
-    public Map<String, Object> reset(@RequestHeader(value = "Authorization", required = false) String h) {
+    public ResponseEntity<Map<String, Object>> reset(@RequestHeader(value = "Authorization", required = false) String h) {
+        if (!demoEnabled) return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                "ok", false, "error", "演示重置未启用"));
         require(h);
         jdbc.update("DELETE FROM feedback");
         jdbc.update("DELETE FROM notification");
@@ -408,25 +419,13 @@ public class ApiController {
         jdbc.update("DELETE FROM participation");
         jdbc.update("DELETE FROM activity");
         jdbc.update("DELETE FROM app_user");
-        // 重置自增序列，避免演示时编号无限增长
-        // MySQL 没有 SEQUENCE：表已清空，AUTO_INCREMENT = 1 即从 1 开始；
-        // PostgreSQL 保持原 ALTER SEQUENCE。
-        if (mysql) {
-            jdbc.execute("ALTER TABLE app_user AUTO_INCREMENT = 1");
-            jdbc.execute("ALTER TABLE activity AUTO_INCREMENT = 1");
-            jdbc.execute("ALTER TABLE participation AUTO_INCREMENT = 1");
-            jdbc.execute("ALTER TABLE invitation AUTO_INCREMENT = 1");
-            jdbc.execute("ALTER TABLE notification AUTO_INCREMENT = 1");
-        } else {
-            jdbc.execute("ALTER SEQUENCE app_user_id_seq RESTART WITH 1");
-            jdbc.execute("ALTER SEQUENCE activity_id_seq RESTART WITH 1");
-            jdbc.execute("ALTER SEQUENCE participation_id_seq RESTART WITH 1");
-            jdbc.execute("ALTER SEQUENCE invitation_id_seq RESTART WITH 1");
-            jdbc.execute("ALTER SEQUENCE notification_id_seq RESTART WITH 1");
-        }
-        // 种子逻辑与 SeedRunner 相同，这里直接复用其 run()（空库时写入）
         new com.campusbuddy.service.SeedRunner(jdbc).run();
-        auth.clearSessions();
-        return Map.of("ok", true);
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                auth.clearSessions();
+            }
+        });
+        return ResponseEntity.ok(Map.of("ok", true));
     }
 }

@@ -1,6 +1,7 @@
 package com.campusbuddy.service;
 
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
@@ -12,6 +13,7 @@ import java.time.LocalDateTime;
 
 /** 空库时写入演示数据；已有数据时不动。演示账号密码均为 123456。 */
 @Component
+@ConditionalOnProperty(name = "app.demo-enabled", havingValue = "true")
 public class SeedRunner implements CommandLineRunner {
     private final JdbcTemplate jdbc;
 

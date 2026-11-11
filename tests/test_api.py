@@ -2,7 +2,8 @@
 """本地真实 PostgreSQL 验收脚本（对运行中的 http://127.0.0.1:8080）。
 覆盖：报名转正式/候补、正式退出触发递补、接受转正式、邀请超时自动顺延、
 20 并发报名上限 4 恰好 4 正式、同一账号并发多次只有一条记录。
-运行前：后端以 INVITE_TTL=10、SWEEP_SECONDS=2 启动；脚本开头调用 /demo/reset。
+运行前：使用隔离测试库，开启 DEMO_ENABLED=true，设置 INVITE_TTL=10、SWEEP_SECONDS=2。
+设置 INVITE_DAY_START_HOUR=0、INVITE_DAY_END_HOUR=24；脚本开头会重置演示数据。
 """
 import concurrent.futures, json, os, sys, time, urllib.request
 
@@ -92,17 +93,15 @@ def main():
     # 先让 demo07 排队（此时 demo06 已是 INVITED，demo07 为候补）
     r7 = req("POST", f"/activities/{aid}/signup", token=toks["demo07"])
     check("demo07 报名为候补", r7.get("my_status") == "WAITING", str(r7))
+    old_inv = detail(toks["demo06"], aid)["invitation_id"]
     print("  等待邀请超时（TTL 10s + 扫描）约 15 秒……")
     time.sleep(15)
     m6 = [p for p in my(toks["demo06"])["participations"] if p["activity_id"] == aid][0]
     m7 = [p for p in my(toks["demo07"])["participations"] if p["activity_id"] == aid][0]
     check("超时后原邀请失效（demo06 回到候补或过期）", m6["status"] in ("WAITING", "EXPIRED"), str(m6))
     check("超时后顺延到下一候补 demo07 收到邀请", m7["status"] == "INVITED" and m7["invitation_id"], str(m7))
-    # 过期确认接口直接拒绝：demo06 的旧邀请已不是 PENDING，再次 accept 应失败（用旧 invitation_id）
-    old_inv = m6.get("invitation_id")
-    if old_inv:
-        rej = req("POST", f"/invitations/{old_inv}/accept", token=toks["demo06"])
-        check("过期邀请确认被拒绝", rej.get("ok") is False, str(rej))
+    rej = req("POST", f"/invitations/{old_inv}/accept", token=toks["demo06"])
+    check("过期邀请确认被拒绝", rej.get("ok") is False and rej.get("invitation_status") == "EXPIRED", str(rej))
 
     # 并发：新建上限 4 活动，20 个不同账号同时报名
     newa = req("POST", "/activities", token=org, body={

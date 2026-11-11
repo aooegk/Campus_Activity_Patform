@@ -1,15 +1,20 @@
 package com.campusbuddy.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.sql.Timestamp;
 import java.time.LocalDateTime;
 import java.util.List;
 
 /** 定时任务：活动生命周期 + 候补超时扫描。重复执行幂等，重启后补扫。 */
 @Service
 public class SweepService {
+    private static final Logger log = LoggerFactory.getLogger(SweepService.class);
+
     private final JdbcTemplate jdbc;
     private final BuddyService buddy;
 
@@ -27,23 +32,29 @@ public class SweepService {
         // 回流与 OPEN→READY 互斥（截止 </> now），先执行回流再执行正向流转，不会互相打架；
         // READY 且已开始的仍由下面的 RUNNING 流转接走，截止已过的仍留在 READY。
         jdbc.update("UPDATE activity SET status='OPEN', updated_at=? WHERE status='READY' AND deadline > ? AND start_time > ?",
-                java.sql.Timestamp.valueOf(now), java.sql.Timestamp.valueOf(now), java.sql.Timestamp.valueOf(now));
+                Timestamp.valueOf(now), Timestamp.valueOf(now), Timestamp.valueOf(now));
         // 活动生命周期（不碰已取消）
         jdbc.update("UPDATE activity SET status='ENDED', updated_at=? WHERE status IN ('OPEN','READY','RUNNING') AND end_time <= ?",
-                java.sql.Timestamp.valueOf(now), java.sql.Timestamp.valueOf(now));
+                Timestamp.valueOf(now), Timestamp.valueOf(now));
         jdbc.update("UPDATE activity SET status='RUNNING', updated_at=? WHERE status IN ('OPEN','READY') AND start_time <= ? AND end_time > ?",
-                java.sql.Timestamp.valueOf(now), java.sql.Timestamp.valueOf(now), java.sql.Timestamp.valueOf(now));
+                Timestamp.valueOf(now), Timestamp.valueOf(now), Timestamp.valueOf(now));
         jdbc.update("UPDATE activity SET status='READY', updated_at=? WHERE status='OPEN' AND deadline <= ? AND start_time > ?",
-                java.sql.Timestamp.valueOf(now), java.sql.Timestamp.valueOf(now), java.sql.Timestamp.valueOf(now));
-        // 超时邀请：逐条在事务内抢占处理，失败可重试
-        List<Long> expired = jdbc.queryForList(
-                "SELECT id FROM invitation WHERE status='PENDING' AND expires_at <= ? ORDER BY expires_at, id",
-                Long.class, java.sql.Timestamp.valueOf(now));
-        for (Long id : expired) {
-            try { buddy.expireOne(id); } catch (Exception e) { /* 下一轮重试 */ }
+                Timestamp.valueOf(now), Timestamp.valueOf(now), Timestamp.valueOf(now));
+        Timestamp cutoff = Timestamp.valueOf(now);
+        boolean daytime = buddy.isDaytime(now);
+        List<Long> activities = jdbc.queryForList(
+                "SELECT a.id FROM activity a WHERE EXISTS (" +
+                "SELECT 1 FROM invitation i JOIN participation p ON p.id=i.participation_id " +
+                "WHERE p.activity_id=a.id AND i.status='PENDING' AND i.expires_at <= ?) " +
+                "OR (? AND a.status='OPEN' AND a.deadline > ? AND EXISTS (" +
+                "SELECT 1 FROM participation p WHERE p.activity_id=a.id AND p.status='WAITING')) ORDER BY a.id",
+                Long.class, cutoff, daytime, cutoff);
+        for (Long id : activities) {
+            try {
+                buddy.refreshInvitations(id);
+            } catch (Exception e) {
+                log.warn("活动 {} 的递补扫描失败，将在下一轮重试", id, e);
+            }
         }
-        // 任务 8：白天补发夜间暂缓的递补邀请（夜间空缺等白天补发给候补第 1 名）。
-        // backfillDaytimeInvites 内部先判白天，夜间直接返回。
-        try { buddy.backfillDaytimeInvites(now); } catch (Exception e) { /* 下一轮重试 */ }
     }
 }

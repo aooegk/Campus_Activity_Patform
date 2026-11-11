@@ -49,3 +49,12 @@ Maven 走阿里云镜像，npm 走 npmmirror；前端打包进后端 Jar，不�
 - 前端：进 `源码/frontend`，`npm install`（已配 npmmirror），`npm run build`，把 `dist` 拷入 `源码/backend/src/main/resources/static/`。
 - 后端：进 `源码/backend`，`mvn -s settings-aliyun.xml package -DskipTests`，产物在 `target/campus-buddy-1.0.0.jar`。
 - 注意：启动必须加 `-Dfile.encoding=UTF-8`（run.bat 里已写好），否则中文建表脚本会乱码；本地代理环境的坑见 `BUILD-NOTES.md`。
+
+
+## 源码启动时的演示模式
+
+后端默认使用 PostgreSQL。使用 MySQL 时，设置 `DB_URL=jdbc:mysql://127.0.0.1:3306/campus_buddy`、`DB_DRIVER=com.mysql.cj.jdbc.Driver` 和 `DB_SCHEMA=classpath:schema-mysql.sql`。两种数据库均通过 `DB_USER` 和 `DB_PASSWORD` 设置连接账号，并用 `java -Dfile.encoding=UTF-8 -Duser.timezone=Asia/Shanghai -jar target/campus-buddy-1.0.0.jar` 启动。
+
+仅在独立的演示或测试数据库上设置 `DEMO_ENABLED=true`。开启后，空库会初始化演示账号和活动，登录后可使用恢复入口。网页加 `?demo=1` 显示演示页脚。默认关闭种子数据和重置接口。
+
+运行 `tests/test_api.py` 或 `tests/test_full_flow.py` 前，在测试后端设置 `INVITE_TTL=10`、`SWEEP_SECONDS=2`、`INVITE_DAY_START_HOUR=0` 和 `INVITE_DAY_END_HOUR=24`。通过 `BASE_URL` 指向测试后端。这两份测试会重置该库的演示数据。

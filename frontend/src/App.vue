@@ -120,7 +120,7 @@
           <p class="hint">报名后组织者仅能看到你的昵称，不会索要或公开你的联系方式。</p>
           <p v-if="isFull(detail)" class="hint">名额已满，报名将进入候补队列，有人退出时按顺序递补。</p>
         </template>
-        <button v-if="user && detail.status !== 'CANCELLED' && detail.participation_id && ['FORMAL','WAITING'].includes(detail.my_status)" class="warn" @click="withdraw(detail.participation_id, detail.activity_id || detail.id, detail.title)">{{ detail.my_status === 'WAITING' ? '放弃候补' : '取消报名' }}</button>
+        <button v-if="user && detail.participation_id && canWithdraw(detail, detail.my_status)" class="warn" @click="withdraw(detail.participation_id, detail.activity_id || detail.id, detail.title)">{{ detail.my_status === 'WAITING' ? '放弃候补' : '取消报名' }}</button>
         <p v-if="user && detail.invitation_id" class="info-line"><span class="info-label">递补邀请</span><b v-if="inviteSecondsLeft(detail.invitation_expires_at) !== undefined && inviteSecondsLeft(detail.invitation_expires_at) !== null">剩余 {{ inviteSecondsLeft(detail.invitation_expires_at) }} 秒，请及时确认</b><b v-else-if="inviteSecondsLeft(detail.invitation_expires_at) === null">邀请已过期</b></p>
         <p v-if="user && detail.invitation_id" class="hint">拒绝后将退出候补队列，如需再排队请重新报名。</p>
         <button v-if="user && detail.invitation_id && inviteSecondsLeft(detail.invitation_expires_at) !== null" class="primary" @click="accept(detail.invitation_id)">接受递补</button>
@@ -226,7 +226,7 @@
             <span v-if="p.status==='INVITED' && inviteSecondsLeft(p.invitation_expires_at) !== undefined">　<span v-if="inviteSecondsLeft(p.invitation_expires_at) !== null">剩余 {{ inviteSecondsLeft(p.invitation_expires_at) }} 秒</span><span v-else>邀请已过期</span></span>
           </p>
           <p v-if="p.status==='INVITED'" class="hint">拒绝后将退出候补队列，如需再排队请重新报名。</p>
-          <button v-if="['FORMAL','WAITING'].includes(p.status)" class="warn" @click="withdraw(p.id, p.activity_id, p.title)">{{ p.status === 'WAITING' ? '放弃候补' : '取消报名' }}</button>
+          <button v-if="canWithdraw(p, p.status)" class="warn" @click="withdraw(p.id, p.activity_id, p.title)">{{ p.status === 'WAITING' ? '放弃候补' : '取消报名' }}</button>
           <button v-if="['WITHDRAWN','EXPIRED','CANCELLED'].includes(p.status)" class="primary" @click="resignup(p.activity_id)">重新报名</button>
           <button v-if="p.invitation_id && p.status==='INVITED' && inviteSecondsLeft(p.invitation_expires_at) !== null" class="primary" @click="accept(p.invitation_id); loadMy()">接受递补</button>
           <button v-if="p.invitation_id && p.status==='INVITED' && inviteSecondsLeft(p.invitation_expires_at) !== null" class="warn" @click="reject(p.invitation_id); loadMy()">拒绝递补</button>
@@ -307,8 +307,8 @@
       <button class="primary" :disabled="publishBusy" @click="publish">{{ publishBusy ? '提交中…' : '发布' }}</button>
     </section>
     <footer v-if="user && demoMode" class="page-foot">
-      <button class="danger" @click="resetDemo">⚠ 恢复演示数据</button>
-      <span class="hint">危险操作：会清空当前业务数据并恢复种子数据，仅演示时使用。</span>
+      <button v-if="demoEnabled" class="danger" @click="resetDemo">⚠ 恢复演示数据</button>
+      <span v-if="demoEnabled" class="hint">危险操作：会清空当前业务数据并恢复种子数据，仅演示时使用。</span>
       <button class="ghost" @click="exitDemoMode">退出演示模式</button>
     </footer>
     <div v-if="picker" class="picker-pop" role="dialog" aria-label="选择日期时间">
@@ -357,6 +357,7 @@ const darkMode = ref(localStorage.getItem('theme') === 'dark')
 // 任务 4：演示模式开关。普通用户默认看不到页脚恢复按钮；演示时在地址后加
 // ?demo=1 一次即可开启（写入 localStorage 'demoMode'），页脚出现恢复入口与退出按钮。
 const demoMode = ref(localStorage.getItem('demoMode') === '1')
+const demoEnabled = ref(false)
 // 任务 3：已展开的通知折叠组（key 含类型，见 groupedNotifs）。
 const expandedGroups = ref(new Set())
 // 任务 19：退出后的明显提示条（带重新报名入口），15 秒后自动消失。
@@ -511,6 +512,10 @@ function exitDemoMode() { demoMode.value = false; localStorage.removeItem('demoM
 function deadlinePassed(a) {
   if (!a || !a.deadline) return false
   return parseShanghai(a.deadline) < nowTick.value
+}
+function canWithdraw(a, status) {
+  return a.status !== 'CANCELLED' && ['FORMAL', 'WAITING'].includes(status)
+    && parseShanghai(a.start_time) > nowTick.value
 }
 function canSignup(a) {
   if (!a) return false
@@ -1080,7 +1085,16 @@ async function changePassword() {
     clearAccountState(); view.value = 'hall'
   } catch (e) { msg.value = friendlyErr(e) } finally { pwBusy.value = false }
 }
-async function resetDemo() { if (!confirm('确认恢复演示数据吗？当前业务数据会被清空。')) return; await api('/api/demo/reset', 'POST'); msg.value = '演示数据已恢复'; loadHall() }
+async function resetDemo() {
+  if (!confirm('确认恢复演示数据吗？当前业务数据会被清空。')) return
+  try {
+    await api('/api/demo/reset', 'POST')
+    logout()
+    msg.value = '演示数据已恢复，请重新登录'
+  } catch (e) {
+    msg.value = e.message
+  }
+}
 function go(v) {
   menuOpen.value = false
   // 任务 14：切页清除提示条（报名提示 5 秒自动消失，退出提示 15 秒；换页即清，行为与登录横幅一致）。
@@ -1115,6 +1129,9 @@ onMounted(async () => {
   // 任务 4：地址带 ?demo=1 时开启演示模式（页脚恢复入口出现），写入 localStorage。
   if (new URLSearchParams(location.search).get('demo') === '1') {
     demoMode.value = true; localStorage.setItem('demoMode', '1')
+  }
+  if (demoMode.value) {
+    api('/api/health').then(health => { demoEnabled.value = health.demo_enabled === true }).catch(() => {})
   }
   // 未登录只见登录页，不拉大厅数据；带 token 才恢复登录并拉大厅（2026-11-10）。
   if (token.value) {
