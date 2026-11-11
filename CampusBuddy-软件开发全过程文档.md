@@ -6,7 +6,7 @@
 - 选题来源：课程设计选题参考（2026.10）“社团活动管理与报名系统”
 - 需求依据：《校园活动组队平台需求规格说明书》CEM-SRS-0001（2026 年 9 月）
 - 技术路线：Vue 3 + Spring Boot 3.3.5 + PostgreSQL 16
-- 版本状态：P0 核心流程 + P1 通知已完成并通过验收；P2 管理后台与评价为后续工作（见第 7 节，实事求是，不虚报）
+- 版本状态：已验证报名、候补递补、组织者编辑、会话、参与历史、签到核对和评价。各批次变更与剩余设计项见 [CHANGELOG.md](CHANGELOG.md)。
 - 阅读方式：想演示只看第 5、6 节；想评审设计看第 2、3 节；想复现看第 5 节和 BUILD-NOTES.md
 
 ---
@@ -34,7 +34,7 @@
 | P0 | 取消活动：作废待确认邀请，参与记录置取消 | 已实现（仅组织者） |
 | P1 | 通知：报名成功、进入候补、收到邀请、活动变更；未读数、全部已读 | 已实现，通知按（用户，事件键）去重 |
 | P1 | 活动大厅搜索、按类别过滤；我的活动；组织者名单与待确认邀请 | 已实现 |
-| P2 | 管理后台、活动评价（1–5 分，≤500 字） | 未实现：表已建（feedback，participation_id 唯一），接口与页面后续补 |
+| P2 | 管理后台、活动评价（1–5 分，≤500 字） | 活动评价已实现并校验到场资格。管理后台待实现 |
 
 ### 1.3 非功能需求
 - 一致性优先于花哨：人数、排名、邀请终态在并发下也不能错（验收见第 4 节）。
@@ -99,7 +99,7 @@ POST /activities、PUT /activities/{id}（版本和修改原因）、POST /activ
 POST /activities/{id}/signup（有参与条件时携带确认标志）、POST /participations/{id}/withdraw；
 POST /invitations/{id}/accept、/reject；
 GET /my、GET /my/participations/{id}/history；
-GET /activities/{id}/attendance、POST /activities/{id}/attendance/code、POST /activities/{id}/attendance/check-in、PUT /activities/{id}/attendance/{userId}；
+签到和出勤核对使用 `/activities/{id}/attendance` 系列接口。评价汇总和本人评价使用 `/activities/{id}/feedback`。
 GET /notifications（支持分页）、POST /notifications/{id}/read、POST /notifications/read-all、POST /demo/reset（仅演示）。
 
 活动及参与的写请求可附加 `Idempotency-Key`。回执按账号和请求键保存，在业务事务内记录已提交响应。相同键对应不同请求时返回 HTTP 409。
@@ -151,7 +151,7 @@ C“周末学习组”上限 10（2 正式）。时间均为相对启动时刻 +
 ### 3.5 已知局限（不回避）
 - 浏览器使用持久化 Cookie 会话，写请求携带 CSRF 令牌。移动端兼容 Bearer 令牌。公网部署需使用 HTTPS，并配置 `SESSION_SECURE=true`。
 - 大厅、我发布的活动、组织者名单和通知支持分页，每页最多 50 条。
-- 无管理后台与评价接口（P2），表已预留，属后续工作。
+- 活动评价已实现。信用结算、独立申诉、活动治理与管理员恢复流程仍待实现。
 - 演示重置接口 `/demo/reset` 默认关闭。仅对独立演示库配置 `DEMO_ENABLED=true`，登录后可重置。
 
 ---
@@ -237,5 +237,4 @@ Windows 上的浏览器打开方式见 5.1。
 ## 7. 总结与后续
 已完成的是一个真正能注册、发布、报名、候补、递补、超时顺延、通知、取消的完整可用版本，
 核心数据库规则全部落到事务与约束里并通过并发与超时验收，不是只有页面的演示壳。
-后续按优先级：P2 评价接口与页面、管理后台；会话持久化与分页；把演示重置接口加鉴权或删除；
-把本文档扩写为期末纸质报告（附表结构、事务设计、测试记录）。
+后续工作包括管理员治理、投诉和独立申诉、信用结算、人工密码恢复与部署验收。

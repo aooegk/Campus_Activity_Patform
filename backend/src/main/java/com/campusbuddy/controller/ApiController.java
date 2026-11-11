@@ -6,6 +6,7 @@ import com.campusbuddy.service.AttendanceService;
 import com.campusbuddy.service.AuthService;
 import com.campusbuddy.service.BuddyService;
 import com.campusbuddy.service.CommandReceipts;
+import com.campusbuddy.service.FeedbackService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
@@ -37,11 +38,12 @@ public class ApiController {
     private final CommandReceipts receipts;
     private final ActivityQueries activityQueries;
     private final AttendanceService attendance;
+    private final FeedbackService feedback;
     private final boolean demoEnabled;
     private final boolean secureSessionCookie;
 
     public ApiController(JdbcTemplate jdbc, AuthService auth, BuddyService buddy, CommandReceipts receipts,
-                         ActivityQueries activityQueries, AttendanceService attendance,
+                         ActivityQueries activityQueries, AttendanceService attendance, FeedbackService feedback,
                          @Value("${app.demo-enabled:false}") boolean demoEnabled,
                          @Value("${app.secure-session-cookie:false}") boolean secureSessionCookie) {
         this.jdbc = jdbc;
@@ -50,6 +52,7 @@ public class ApiController {
         this.receipts = receipts;
         this.activityQueries = activityQueries;
         this.attendance = attendance;
+        this.feedback = feedback;
         this.demoEnabled = demoEnabled;
         this.secureSessionCookie = secureSessionCookie;
     }
@@ -258,15 +261,7 @@ public class ApiController {
         return receipts.execute(me, key, "POST /activities/" + id + "/cancel", body, () -> {
             if (body == null || !Boolean.TRUE.equals(body.get("confirmed")))
                 throw new IllegalStateException("请确认取消活动");
-            Integer affected = null;
-            if (body.get("expected_affected") != null) {
-                try {
-                    affected = Integer.parseInt(String.valueOf(body.get("expected_affected")));
-                    if (affected < 0) throw new NumberFormatException();
-                } catch (NumberFormatException e) {
-                    throw new IllegalStateException("受影响人数格式不正确");
-                }
-            }
+            Integer affected = optionalCount(body, "expected_affected");
             return commandResponse(buddy.cancelActivity(id, me, activityVersion(body), ActivityFields.reason(body), affected));
         });
     }
@@ -279,8 +274,36 @@ public class ApiController {
         long me = require(actor);
         return receipts.execute(me, key, "PUT /activities/" + id, body, () -> {
             return commandResponse(buddy.updateActivity(id, me, activityVersion(body),
-                    ActivityFields.from(body), ActivityFields.reason(body)));
+                    ActivityFields.from(body), ActivityFields.reason(body), optionalCount(body, "confirmed_conflict_count")));
         });
+    }
+
+    private Integer optionalCount(Map<String, Object> body, String key) {
+        if (body.get(key) == null) return null;
+        try {
+            int count = Integer.parseInt(String.valueOf(body.get(key)));
+            if (count < 0) throw new NumberFormatException();
+            return count;
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("受影响人数格式不正确");
+        }
+    }
+
+    private Set<Long> confirmedConflicts(Map<String, Object> body) {
+        if (body == null || body.get("confirmed_conflicts") == null) return Set.of();
+        if (!(body.get("confirmed_conflicts") instanceof List<?> values))
+            throw new IllegalStateException("冲突确认须提供活动编号列表");
+        Set<Long> ids = new HashSet<>();
+        try {
+            for (Object value : values) {
+                long id = Long.parseLong(String.valueOf(value));
+                if (id <= 0) throw new NumberFormatException();
+                ids.add(id);
+            }
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("冲突确认中的活动编号不合法");
+        }
+        return ids;
     }
 
     private long activityVersion(Map<String, Object> body) {
@@ -306,8 +329,9 @@ public class ApiController {
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
         long me = require(actor);
         return receipts.execute(me, key, "POST /activities/" + id + "/reschedule", body,
-                () -> ResponseEntity.ok(buddy.reschedule(id, me, ActivityFields.time(body, "deadline"),
-                        ActivityFields.time(body, "start_time"), ActivityFields.time(body, "end_time"))));
+                () -> commandResponse(buddy.reschedule(id, me, ActivityFields.time(body, "deadline"),
+                        ActivityFields.time(body, "start_time"), ActivityFields.time(body, "end_time"),
+                        optionalCount(body, "confirmed_conflict_count"))));
     }
 
     // 任务 9（2026-11-09）：站内留言——详情页「给组织者留言」，登录用户报名前后均可。
@@ -349,7 +373,7 @@ public class ApiController {
         return receipts.execute(me, key, "POST /activities/" + id + "/signup", body, () -> {
             boolean confirmed = body != null && Boolean.TRUE.equals(body.get("conditions_confirmed"));
             Long version = body != null && body.get("version") != null ? activityVersion(body) : null;
-            return commandResponse(buddy.signup(id, me, confirmed, version));
+            return commandResponse(buddy.signup(id, me, confirmed, version, confirmedConflicts(body)));
         });
     }
 
@@ -364,11 +388,12 @@ public class ApiController {
 
     @PostMapping("/invitations/{id}/accept")
     public ResponseEntity<Map<String, Object>> accept(@PathVariable long id,
+            @RequestBody(required = false) Map<String, Object> body,
             @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor,
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
         long me = require(actor);
-        return receipts.execute(me, key, "POST /invitations/" + id + "/accept", null,
-                () -> invitationResponse(buddy.respondInvitation(id, me, true), "ACCEPTED"));
+        return receipts.execute(me, key, "POST /invitations/" + id + "/accept", body,
+                () -> invitationResponse(buddy.respondInvitation(id, me, true, confirmedConflicts(body)), "ACCEPTED"));
     }
 
     @PostMapping("/invitations/{id}/reject")
@@ -377,12 +402,13 @@ public class ApiController {
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
         long me = require(actor);
         return receipts.execute(me, key, "POST /invitations/" + id + "/reject", null,
-                () -> invitationResponse(buddy.respondInvitation(id, me, false), "REJECTED"));
+                () -> invitationResponse(buddy.respondInvitation(id, me, false, Set.of()), "REJECTED"));
     }
 
     private ResponseEntity<Map<String, Object>> invitationResponse(Map<String, Object> result, String expected) {
         String status = (String) result.get("invitation_status");
-        if (status == null || expected.equals(status)) return ResponseEntity.ok(result);
+        if (status == null) return commandResponse(result);
+        if (expected.equals(status)) return ResponseEntity.ok(result);
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
                 "ok", false, "invitation_status", status,
                 "error", "EXPIRED".equals(status) ? "邀请已过期" : "该邀请已处理，无法再次操作"));
@@ -426,6 +452,28 @@ public class ApiController {
         String status = body.get("status") instanceof String text ? text : "";
         String reason = body.get("reason") instanceof String text ? text.strip() : "";
         return attendance.review(id, reviewer, userId, version, status, reason);
+    }
+
+    @GetMapping("/activities/{id}/feedback")
+    public Map<String, Object> feedback(@PathVariable long id,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        return feedback.view(id, actor);
+    }
+
+    @PutMapping("/activities/{id}/feedback")
+    public Map<String, Object> saveFeedback(@PathVariable long id, @RequestBody Map<String, Object> body,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        long userId = require(actor);
+        int score;
+        try {
+            score = Integer.parseInt(String.valueOf(body.get("score")));
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("评分须为 1–5 的整数");
+        }
+        if (body.get("content") != null && !(body.get("content") instanceof String))
+            throw new IllegalStateException("评价正文须为文本");
+        String content = body.get("content") instanceof String text ? text.strip() : "";
+        return feedback.save(id, userId, score, content);
     }
 
     @GetMapping("/my")
@@ -525,6 +573,7 @@ public class ApiController {
         require(actor);
         jdbc.update("DELETE FROM auth_session");
         jdbc.update("DELETE FROM login_attempt");
+        jdbc.update("DELETE FROM user_schedule_lock");
         jdbc.update("DELETE FROM operation_receipt");
         jdbc.update("DELETE FROM attendance_review_event");
         jdbc.update("DELETE FROM attendance_record");

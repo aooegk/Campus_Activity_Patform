@@ -60,3 +60,12 @@ Maven 走阿里云镜像，npm 走 npmmirror；前端打包进后端 Jar，不�
 运行 `tests/test_api.py` 或 `tests/test_full_flow.py` 前，在测试后端设置 `INVITE_TTL=10`、`SWEEP_SECONDS=2`、`INVITE_DAY_START_HOUR=0` 和 `INVITE_DAY_END_HOUR=24`。通过 `BASE_URL` 指向测试后端。这两份测试会重置该库的演示数据。
 
 公网部署使用 HTTPS，并设置 `SESSION_SECURE=true`。浏览器会话通过 HttpOnly Cookie 保存，原生 App 继续使用 Bearer 令牌。
+
+
+## 分支验收
+
+在独立演示库上启用 `DEMO_ENABLED=true`。用 `BASE_URL` 指定后端地址，按需运行 `tests/test_api.py`、`tests/test_full_flow.py` 和对应的专项脚本。部分脚本会重置演示库。
+
+网页冒烟脚本为 `tests/test_web_smoke.cjs`。将 `CAMPUS_PLAYWRIGHT` 指向已安装的 Playwright Core 模块，将 `CAMPUS_BROWSER` 指向本机 Chromium 或 Edge 可执行文件，再运行 `node tests/test_web_smoke.cjs`。如已运行 `tests/test_attendance.py` 生成评价测试数据，可设置 `CAMPUS_VERIFY_FEEDBACK=1` 验证出勤和评价页面。
+
+本分支的变更和待办见 [CHANGELOG.md](CHANGELOG.md)。

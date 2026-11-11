@@ -66,7 +66,8 @@ def main():
     check("种子活动 A 上限 4、已有 3 正式", a["formal_count"] == 3 and a["capacity"] == 4, str(a))
 
     # 报名：demo04 正式、demo05/06 候补
-    r4 = req("POST", f"/activities/{aid}/signup", token=toks["demo04"], body={"conditions_confirmed": True})
+    conflicting_seed = next(row for row in req("GET", "/activities", token=org) if row["title"] == "桌游之夜")
+    r4 = req("POST", f"/activities/{aid}/signup", token=toks["demo04"], body={"conditions_confirmed": True, "confirmed_conflicts": [conflicting_seed["id"]]})
     r5 = req("POST", f"/activities/{aid}/signup", token=toks["demo05"], body={"conditions_confirmed": True})
     r6 = req("POST", f"/activities/{aid}/signup", token=toks["demo06"], body={"conditions_confirmed": True})
     check("第 4 人报名转正式", r4.get("my_status") == "FORMAL", str(r4))
@@ -122,7 +123,8 @@ def main():
     newa2 = req("POST", "/activities", token=org, body={
         "title": "重复提交测试", "category": "其他", "description": "重复测试",
         "conditions": "", "location": "线上", "capacity": 10,
-        "deadline": DEADLINE, "start_time": START, "end_time": END})
+        "deadline": DEADLINE,  "start_time": (datetime.fromisoformat(END) + timedelta(hours=1)).isoformat(),
+        "end_time": (datetime.fromisoformat(END) + timedelta(hours=2)).isoformat()})
     cid2 = newa2["id"]
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as ex:
         list(ex.map(lambda _: req("POST", f"/activities/{cid2}/signup", token=toks["demo01"]), range(10)))

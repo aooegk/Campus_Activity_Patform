@@ -3,10 +3,11 @@
 from concurrent.futures import ThreadPoolExecutor
 from uuid import uuid4
 
-from test_api import DEADLINE, END, START, detail, login, req
+from test_api import DEADLINE, END, START, authed_reset, detail, login, req
 
 
 def main():
+    authed_reset()
     organizer, member = map(login, ("organizer", "demo01"))
     key = uuid4().hex
     fields = {

@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 from uuid import uuid4
 
-from test_api import DEADLINE, END, START, detail, login, req
+from test_api import DEADLINE, END, START, authed_reset, detail, login, req
 
 
 def main():
+    authed_reset()
     org, member = map(login, ("organizer", "demo01"))
     fields = {
         "title": "活动确认验收",

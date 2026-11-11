@@ -162,3 +162,8 @@ CREATE TABLE IF NOT EXISTS attendance_review_event (
     FOREIGN KEY (activity_id, user_id) REFERENCES attendance_record(activity_id, user_id),
     FOREIGN KEY (reviewer_id) REFERENCES app_user(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS user_schedule_lock (
+    user_id BIGINT PRIMARY KEY,
+    FOREIGN KEY (user_id) REFERENCES app_user(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

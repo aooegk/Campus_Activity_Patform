@@ -2,10 +2,11 @@
 from urllib.parse import urlencode
 from uuid import uuid4
 
-from test_api import DEADLINE, END, START, detail, login, req
+from test_api import DEADLINE, END, START, authed_reset, detail, login, req
 
 
 def main():
+    authed_reset()
     org, a, b, c, d = map(login, ("organizer", "demo01", "demo02", "demo03", "demo04"))
     tag = "catalog" + uuid4().hex[:8]
     fields = {

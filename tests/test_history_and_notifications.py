@@ -3,10 +3,11 @@
 from datetime import datetime, timedelta
 from time import monotonic, sleep
 
-from test_api import DEADLINE, END, START, detail, login, req
+from test_api import DEADLINE, END, START, authed_reset, detail, login, req
 
 
 def main():
+    authed_reset()
     org, first, waiting, outsider = map(login, ("organizer", "demo01", "demo02", "demo03"))
     fields = {
         "title": "个人活动与通知验收",

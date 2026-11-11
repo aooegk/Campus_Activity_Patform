@@ -72,7 +72,19 @@ def main():
     assert req("PUT", review_path, token=org, body={"version": 0, "status": "PRESENT"})["ok"] is False
     assert req("GET", attendance, token=first)["own"]["review_status"] == "PRESENT"
     assert any(n["activity_id"] == aid and "出勤结果" in n["content"] for n in req("GET", "/notifications", token=first)["list"])
-    print("PASS - check-in window, code access, rate limit, start snapshot and versioned reviews")
+    feedback = path + "/feedback"
+    assert req("GET", feedback)["total"] == 0
+    assert req("PUT", feedback, token=no_show, body={"score": 5})["ok"] is False
+    assert req("PUT", feedback, token=first, body={"score": 6})["ok"] is False
+    assert req("PUT", feedback, token=first, body={"score": 5, "content": "活动组织有序"})["ok"]
+    assert req("PUT", feedback, token=first, body={"score": 4, "content": "场地可以再宽敞一些"})["ok"]
+    summary = req("GET", feedback)
+    assert summary["total"] == 1 and summary["average"] == 4, summary
+    assert "entries" not in summary and "own" not in summary
+    assert req("GET", feedback, token=first)["own"]["content"] == "场地可以再宽敞一些"
+    assert req("GET", feedback, token=org)["entries"][0]["content"] == "场地可以再宽敞一些"
+    assert "entries" not in req("GET", feedback, token=outsider)
+    print("PASS - check-in window, code access, rate limit, start snapshot, versioned reviews and private feedback")
 
 
 if __name__ == "__main__":

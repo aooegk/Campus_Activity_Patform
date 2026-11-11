@@ -229,7 +229,9 @@ public class BuddyService {
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public Map<String, Object> signup(long activityId, long userId, boolean confirmed, Long version) {
+    public Map<String, Object> signup(long activityId, long userId, boolean confirmed, Long version,
+                                       Set<Long> confirmedConflicts) {
+        lockSchedule(userId);
         var act = lockActivity(activityId);
         LocalDateTime now = LocalDateTime.now();
         if (!"OPEN".equals(act.get("status")))
@@ -252,6 +254,8 @@ public class BuddyService {
         }
         if (!confirmed && !((String) act.get("conditions")).isBlank())
             throw new IllegalStateException("请阅读并确认活动参与条件");
+        var conflicts = scheduleConflict(act, userId, confirmedConflicts);
+        if (conflicts != null) return conflicts;
         int capacity = ((Number) act.get("capacity")).intValue();
         boolean hasQueue = waitingCount(activityId) > 0;
         int occupied = formalCount(activityId) + reservedCount(activityId, now);
@@ -340,7 +344,9 @@ public class BuddyService {
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public Map<String, Object> respondInvitation(long invitationId, long userId, boolean accept) {
+    public Map<String, Object> respondInvitation(long invitationId, long userId, boolean accept,
+                                                  Set<Long> confirmedConflicts) {
+        if (accept) lockSchedule(userId);
         var owner = invitationOwner(invitationId);
         long activityId = ((Number) owner.get("activity_id")).longValue();
         var act = lockActivity(activityId);
@@ -361,6 +367,8 @@ public class BuddyService {
             throw new IllegalStateException("报名已截止或活动不可报名");
         long partId = ((Number) inv.get("participation_id")).longValue();
         if (accept) {
+            var conflicts = scheduleConflict(act, userId, confirmedConflicts);
+            if (conflicts != null) return conflicts;
             int changed = jdbc.update(
                     "UPDATE invitation SET status='ACCEPTED', responded_at=? WHERE id=? AND status='PENDING'",
                     ts(now), invitationId);
@@ -383,6 +391,29 @@ public class BuddyService {
             promote(activityId, act, now);
         }
         return detail(activityId, userId);
+    }
+
+    private void lockSchedule(long userId) {
+        // 独立行锁避免账号行的外键锁与通知写入互相等待。
+        String upsert = mysql ? " ON DUPLICATE KEY UPDATE user_id=user_id" : " ON CONFLICT (user_id) DO NOTHING";
+        jdbc.update("INSERT INTO user_schedule_lock(user_id) VALUES (?)" + upsert, userId);
+        jdbc.queryForObject("SELECT user_id FROM user_schedule_lock WHERE user_id=? FOR UPDATE", Long.class, userId);
+    }
+
+    private Map<String, Object> scheduleConflict(Map<String, Object> activity, long userId, Set<Long> confirmed) {
+        var conflicts = jdbc.queryForList("""
+                SELECT a.id, a.title, a.start_time, a.end_time
+                FROM activity a JOIN participation p ON p.activity_id=a.id AND p.user_id=?
+                WHERE a.id<>? AND p.status='FORMAL' AND a.status NOT IN ('CANCELLED','ENDED')
+                  AND a.start_time < ? AND a.end_time > ?
+                ORDER BY a.start_time, a.id
+                """, userId, activity.get("id"), ts(asLocalDateTime(activity.get("end_time"))),
+                ts(asLocalDateTime(activity.get("start_time"))));
+        Set<Long> actual = new HashSet<>();
+        for (var conflict : conflicts) actual.add(((Number) conflict.get("id")).longValue());
+        if (actual.isEmpty() || actual.equals(confirmed)) return null;
+        return Map.of("ok", false, "code", "SCHEDULE_CONFLICT",
+                "error", "与已报名活动时间重叠，请确认是否继续", "conflicts", conflicts);
     }
 
     private Map<String, Object> invitationOwner(long invitationId) {
@@ -490,22 +521,22 @@ public class BuddyService {
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> updateActivity(long activityId, long organizerId, long version,
-                                               ActivityFields fields, String reason) {
+                                               ActivityFields fields, String reason, Integer confirmedImpact) {
         var act = lockActivity(activityId);
         requireOrganizer(act, organizerId);
         if (version != ((Number) act.get("version")).longValue()) return versionConflict(act);
-        return saveActivityUpdate(activityId, act, fields, reason);
+        return saveActivityUpdate(activityId, act, fields, reason, confirmedImpact);
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> reschedule(long activityId, long organizerId,
-                                          LocalDateTime deadline, LocalDateTime start, LocalDateTime end) {
+                                          LocalDateTime deadline, LocalDateTime start, LocalDateTime end, Integer confirmedImpact) {
         var act = lockActivity(activityId);
         requireOrganizer(act, organizerId);
         var fields = new ActivityFields((String) act.get("title"), (String) act.get("category"),
                 (String) act.get("description"), (String) act.get("conditions"), (String) act.get("location"),
                 ((Number) act.get("capacity")).intValue(), deadline, start, end);
-        return saveActivityUpdate(activityId, act, fields, "");
+        return saveActivityUpdate(activityId, act, fields, "", confirmedImpact);
     }
 
     private Map<String, Object> versionConflict(Map<String, Object> act) {
@@ -519,7 +550,7 @@ public class BuddyService {
     }
 
     private Map<String, Object> saveActivityUpdate(long activityId, Map<String, Object> act,
-                                                    ActivityFields fields, String reason) {
+                                                    ActivityFields fields, String reason, Integer confirmedImpact) {
         LocalDateTime now = LocalDateTime.now();
         if (!"OPEN".equals(act.get("status")) || !now.isBefore(asLocalDateTime(act.get("deadline"))))
             throw new IllegalStateException("报名已截止或活动不可修改");
@@ -547,6 +578,23 @@ public class BuddyService {
             }
         }
 
+        Set<Long> overlaps = changes.containsKey("start_time") || changes.containsKey("end_time")
+                ? new HashSet<>(jdbc.queryForList("""
+                        SELECT p.user_id FROM participation p
+                        WHERE p.activity_id=? AND p.status='FORMAL' AND EXISTS (
+                            SELECT 1 FROM participation other
+                            JOIN activity a ON a.id=other.activity_id
+                            WHERE other.user_id=p.user_id AND other.status='FORMAL' AND a.id<>?
+                              AND a.status NOT IN ('CANCELLED','ENDED')
+                              AND a.start_time < ? AND a.end_time > ?
+                        )
+                        """, Long.class, activityId, activityId, ts(fields.end()), ts(fields.start())))
+                : Set.of();
+        if (!overlaps.isEmpty() && !Objects.equals(confirmedImpact, overlaps.size())) {
+            return Map.of("ok", false, "code", "RESCHEDULE_TIME_CONFLICT", "affected", overlaps.size(),
+                    "error", "改期会与部分成员的其他活动重叠，请确认影响人数");
+        }
+
         long version = ((Number) act.get("version")).longValue();
         int affected = 0;
         if (!changes.isEmpty()) {
@@ -567,14 +615,15 @@ public class BuddyService {
                     "，地点 " + fields.location() + "，人数上限 " + fields.capacity() + "。" +
                     (reason.isEmpty() ? "" : "原因：" + reason);
             for (long userId : recipients) {
-                notify(userId, activityId, null, "变更", content,
+                String message = overlaps.contains(userId) ? content + "新时间与您的其他活动重叠，请核对日程。" : content;
+                notify(userId, activityId, null, "变更", message,
                         "notify:edit:" + activityId + ":" + userId + ":" + version);
             }
             act.putAll(values);
             promote(activityId, act, now);
         }
         return Map.of("ok", true, "activity_id", activityId, "version", version, "changes", changes,
-                "affected", affected, "deadline", fields.deadline().toString(),
+                "affected", affected, "schedule_conflicts", overlaps.size(), "deadline", fields.deadline().toString(),
                 "start_time", fields.start().toString(), "end_time", fields.end().toString());
     }
 

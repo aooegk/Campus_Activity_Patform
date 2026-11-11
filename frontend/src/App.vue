@@ -137,8 +137,10 @@
         </details>
         <p v-if="detail.status === 'CANCELLED'" class="info-line"><b>该活动已取消</b><span v-if="detail.cancel_reason">　{{ detail.cancel_reason }}</span></p>
         <AttendancePanel v-if="user && detail.status !== 'CANCELLED' && (detail.is_organizer || detail.my_status === 'FORMAL')"
-                         :key="detail.id" :activity-id="detail.id" :organizer="detail.is_organizer"
+                         :key="'attendance-' + detail.id" :activity-id="detail.id" :organizer="detail.is_organizer"
                          :clock="nowTick" :request="api" :format-time="fmtWeekSec" />
+        <FeedbackPanel v-if="user && detail.status !== 'CANCELLED' && parseShanghai(detail.end_time) <= nowTick"
+                       :key="'feedback-' + detail.id" :activity-id="detail.id" :request="api" />
         <div v-if="user && detail.status !== 'CANCELLED' && !detail.is_organizer" class="message-box">
           <label class="field-label" for="message-draft">给组织者留言</label>
           <input id="message-draft" v-model="messageDraft" placeholder="如：请问场地有电梯吗？" maxlength="200" />
@@ -369,6 +371,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import PageNav from './PageNav.vue'
 import AttendancePanel from './AttendancePanel.vue'
+import FeedbackPanel from './FeedbackPanel.vue'
 const view = ref('hall')
 // 详情页从哪来（大厅 / 我的活动），返回时回到原地（2026-11-10 详情独立页）。
 const detailFrom = ref('hall')
@@ -404,6 +407,670 @@ const demoEnabled = ref(false)
 const expandedGroups = ref(new Set())
 // 任务 19：退出后的明显提示条（带重新报名入口），15 秒后自动消失。
 const withdrawNotice = ref(null)
+// 任务 7：组织者名单视图的数据与错误。
+const rosterActivity = ref(null), rosterError = ref('')
+const rosterPages = ref({})
+const rosterSections = [
+  { status: 'FORMAL', title: '正式名单', empty: '暂无正式成员。' },
+  { status: 'INVITED', title: '待确认', empty: '暂无待确认邀请。' },
+  { status: 'WAITING', title: '候补队列', empty: '暂无候补。' },
+]
+const form = ref({ title: '', category: '羽毛球', location: '', capacity: 4, deadline: '', start_time: '', end_time: '', description: '', conditions: '' })
+// 任务 11：演示快捷登录改为下拉自选，默认不选组织者号。
+const quickAccount = ref('demo01')
+// 任务 5：校区筛选（地点文本派生，不加字段）。
+const campus = ref('')
+// 任务 8/18：每秒刷新一次的时钟，驱动报名截止倒计时与递补邀请剩余秒数。
+const nowTick = ref(Date.now())
+let serverClockOffset = 0
+// 任务 9：留言草稿（详情页）与回复草稿（按留言 id）。
+const messageDraft = ref('')
+// 任务 17（2026-11-10）：本人发过的留言及组织者回复（GET /api/activities/{id}/messages）。
+const myMessages = ref([])
+const replyDrafts = ref({})
+// 任务 10：改密码表单。
+const pwForm = ref({ oldPw: '', newPw: '' })
+const pwBusy = ref(false)
+// 组织者在报名截止前可编辑活动资料。
+const rescheduleSource = ref(null)
+const rescheduleOpen = ref(false)
+const rescheduleForm = ref({ deadline: '', start_time: '', end_time: '' })
+const rescheduleBusy = ref(false)
+// 任务 12：自定义日期时间选择器状态（target: 'form' 发布表单 | 'reschedule' 改时间）。
+const picker = ref(null)
+const pickerYear = ref(2026), pickerMonth = ref(11), pickerDay = ref(9), pickerHour = ref(18), pickerMinute = ref(0)
+// 任务 18：已触发过自动刷新的过期邀请（按活动 id 去重，避免每秒重复拉取）。
+const expiredRefreshed = ref(new Set())
+let tickTimer = null
+
+const headers = () => token.value ? { 'Authorization': 'Bearer ' + token.value, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' }
+// 手机原生 App 用：后端不在本机时，在此填电脑地址（如 http://192.168.1.5:8080），留空则用当前页面地址（网页/PWA 默认）
+const apiBase = ref(localStorage.getItem('apiBase') || '')
+// 后端地址只在 Capacitor 原生 App 里才需要（页面不在服务器上，相对 /api/ 走不通，
+// 须指明后端地址）；网页 / PWA 与后端同源，默认就是当前地址，不用填也不显示（2026-11-10 用户问）。
+const isCapacitor = ref(typeof window !== 'undefined' && !!window.Capacitor)
+function saveApiBase() {
+  localStorage.setItem('apiBase', apiBase.value.trim())
+  loadDemoStatus()
+}
+async function loadDemoStatus() {
+  try {
+    const health = await api('/api/health')
+    demoEnabled.value = health.demo_enabled === true
+    alignServerClock(health.server_time)
+  } catch { demoEnabled.value = false }
+}
+function csrfCookie() {
+  const entry = document.cookie.split(';').map(part => part.trim()).find(part => part.startsWith('campus_csrf='))
+  return entry ? entry.slice('campus_csrf='.length) : ''
+}
+function hasSession() {
+  return !!token.value || (!isCapacitor.value && !!csrfCookie())
+}
+async function api(path, method = 'GET', body) {
+  const url = (isCapacitor.value ? apiBase.value.trim().replace(/\/$/, '') : '') + path
+  const options = { method, headers: headers(), body: body ? JSON.stringify(body) : undefined }
+  if (!isCapacitor.value && !token.value && method !== 'GET') {
+    const csrf = csrfCookie()
+    if (csrf) options.headers['X-CSRF-Token'] = csrf
+  }
+  const replayable = (method === 'PUT' && /^\/api\/activities\/\d+$/.test(path))
+    || (method === 'POST' && /^\/api\/(?:activities(?:\/\d+\/(?:signup|cancel|reschedule))?|participations\/\d+\/withdraw|invitations\/\d+\/(?:accept|reject))$/.test(path))
+  if (replayable) {
+    const bytes = crypto.getRandomValues(new Uint8Array(16))
+    options.headers['Idempotency-Key'] = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('')
+  }
+  let r
+  try {
+    r = await fetch(url, options)
+  } catch (error) {
+    if (!replayable) throw error
+    r = await fetch(url, options)
+  }
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    const error = new Error(j.error || ('请求失败 ' + r.status))
+    error.code = j.code
+    error.conflicts = j.conflicts
+    error.affected = j.affected
+    throw error
+  }
+  return j
+}
+function statusText(s) {
+  return { FORMAL: '正式成员', WAITING: '候补中', INVITED: '待确认', WITHDRAWN: '已退出', EXPIRED: '已过期', CANCELLED: '已取消' }[s] || s
+}
+// 仅展示用：把后端 ISO / 空格时间截成“YYYY-MM-DD HH:mm”，不改业务时间值
+function fmt(s) {
+  if (!s) return ''
+  return String(s).replace('T', ' ').slice(0, 16)
+}
+// 任务 4：时间加星期几与时段标注，如“2026-11-09 周日 上午 10:41”。
+// 入参是东八区墙钟字符串，直接按本地时间取星期，不做时区换算。
+const WEEK = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+function periodWord(h) {
+  if (h < 6) return '凌晨'
+  if (h < 12) return '上午'
+  if (h < 18) return '下午'
+  return '晚上'
+}
+function fmtWeek(s) {
+  if (!s) return ''
+  const m = String(s).replace('T', ' ').match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/)
+  if (!m) return fmt(s)
+  const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5])
+  return `${m[1]}-${m[2]}-${m[3]} ${WEEK[d.getDay()]} ${periodWord(+m[4])} ${m[4]}:${m[5]}`
+}
+// 任务 8/18：服务端时间是东八区墙钟字符串（无时区后缀），浏览器
+// new Date() 会按浏览器本地时区解析——本机 Chromium 是 UTC，会偏 8 小时
+// （实测邀请剩余秒数多算 28916 秒）。统一按 +08:00 解析成绝对时间戳，
+// 与浏览器时区无关。fmtWeek 只取星期（按墙钟分量算）不受影响，不动它。
+function parseShanghai(s) {
+  if (!s) return NaN
+  const m = String(s).replace('T', ' ').match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})(?::(\d{2}))?/)
+  if (!m) return NaN
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] - 8, +m[5], +(m[6] || 0))
+}
+function fmtWeekSec(s) {
+  if (!s) return ''
+  const m = String(s).replace('T', ' ').match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/)
+  if (!m) return fmtWeek(s)
+  return fmtWeek(s) + ':' + m[6]
+}
+// 任务 7：详情持续时长（由起止时间算出，不新增字段）。
+function durationText(a) {
+  if (!a || !a.start_time || !a.end_time) return ''
+  const t0 = new Date(String(a.start_time).replace(' ', 'T'))
+  const t1 = new Date(String(a.end_time).replace(' ', 'T'))
+  const mins = Math.round((t1 - t0) / 60000)
+  if (!(mins > 0)) return ''
+  if (mins < 60) return `持续约 ${mins} 分钟`
+  const h = Math.floor(mins / 60), r = mins % 60
+  return r ? `持续约 ${h} 小时 ${r} 分钟` : `持续约 ${h} 小时`
+}
+// 任务 8：报名截止倒计时（只显示，不改变报名判定逻辑；每秒由 nowTick 刷新）。
+function alignServerClock(serverTime) {
+  const parsed = parseShanghai(serverTime)
+  if (!Number.isFinite(parsed)) return
+  serverClockOffset = parsed - Date.now()
+  nowTick.value = parsed
+}
+function deadlineCountdown(a) {
+  if (!a || !a.deadline) return ''
+  const diff = parseShanghai(a.deadline) - nowTick.value
+  if (diff <= 0) return '报名已截止'
+  const mins = Math.floor(diff / 60000)
+  if (mins < 1) return '距截止还有不到 1 分钟'
+  if (mins < 60) return `距截止还有 ${mins} 分钟`
+  const h = Math.floor(mins / 60), r = mins % 60
+  return r ? `距截止还有 ${h} 小时 ${r} 分钟` : `距截止还有 ${h} 小时`
+}
+// 任务 4（2026-11-10）：邀请通知倒计时。优先用后端通知行带的 expires_at
+// （配合任务 4 后端改动，LEFT JOIN invitation 返回）；无该字段时解析通知文案
+// 里的截止时间（后端 fmtFullMinute 固定格式「请在 2026-11-10 周二 上午 09:16 前确认」）；
+// undefined = 非邀请通知或解析不到（不显示倒计时）；'已过期' = 已过截止。
+function inviteCountdownText(n) {
+  if (!n || n.type !== '邀请' || (n.invitation_status && n.invitation_status !== 'PENDING')) return undefined
+  let ts = NaN
+  if (n.expires_at) ts = parseShanghai(n.expires_at)
+  if (Number.isNaN(ts)) {
+    const m = String(n.content || '').match(/请在\s*(\d{4}-\d{2}-\d{2})\s+\S+\s+\S+\s+(\d{2}):(\d{2})\s*前确认/)
+    if (!m) return undefined
+    ts = parseShanghai(m[1] + ' ' + m[2] + ':' + m[3])
+  }
+  const diff = ts - nowTick.value
+  if (diff <= 0) return '已过期'
+  const secs = Math.floor(diff / 1000)
+  if (secs >= 60) return `还剩 ${Math.floor(secs / 60)} 分 ${secs % 60} 秒`
+  return `还剩 ${secs} 秒`
+}
+// 任务 18：递补邀请剩余秒数。undefined = 无过期时间（不显示倒计时，
+// 按钮照常可点）；null = 已过期；数字 = 剩余秒数。
+function inviteSecondsLeft(exp) {
+  if (!exp) return undefined
+  const diff = parseShanghai(exp) - nowTick.value
+  if (diff <= 0) return null
+  return Math.floor(diff / 1000)
+}
+// 任务 2/6 返工（2026-11-09）：「变更」不再映射为「退出」。
+// 退出通知自 2026-11-08 起 type 直接存「退出」（BuddyService.withdraw，
+// 迁移 001 已把历史 11 行旧「变更」退出通知改写为「退出」）；
+// 2026-11-09 核对：双库快照含 0 行「变更」，B 库现存 3 行「变更」
+// 均为改时间通知（id 27/63/91），无旧退出行残留，兼容映射无保留必要。
+// 「变更」现只用于改时间通知，展示为「时间变更」。
+function notifTypeText(t) { return t === '变更' ? '活动变更' : t }
+// 任务 9：深色模式切换（只用 REA v4 深色 token，见 style.css body.dark）。
+function applyTheme() {
+  document.body.classList.toggle('dark', darkMode.value)
+  localStorage.setItem('theme', darkMode.value ? 'dark' : 'light')
+}
+function toggleTheme() { darkMode.value = !darkMode.value; applyTheme(); drawCapRings() }
+// 任务 4：退出演示模式（恢复按钮随之隐藏，功能本身保留，?demo=1 可再开）。
+function exitDemoMode() { demoMode.value = false; localStorage.removeItem('demoMode') }
+// 任务 2：报名是否可点——状态是前后端唯一口径（任务 1 定方案 (a) 后，
+// READY 且截止未到会在一个 sweep 周期内自动翻回 OPEN；此处只按状态 + 截止展示）。
+function deadlinePassed(a) {
+  if (!a || !a.deadline) return false
+  return parseShanghai(a.deadline) <= nowTick.value
+}
+function canWithdraw(a, status) {
+  return a.status !== 'CANCELLED' && ['FORMAL', 'WAITING'].includes(status)
+    && parseShanghai(a.start_time) > nowTick.value
+}
+function canSignup(a) {
+  if (!a) return false
+  return a.status === 'OPEN' && a.signup_open !== false && !deadlinePassed(a)
+}
+function signupDisabledReason(a) {
+  if (!a) return '报名未开始'
+  if (a.status === 'CANCELLED') return '活动已取消'
+  if (a.status === 'ENDED') return '活动已结束'
+  if (a.status === 'RUNNING') return '活动进行中，报名已截止'
+  if (deadlinePassed(a)) return '报名已截止'
+  return '报名未开始'
+}
+// 任务 2：大厅卡片 / 详情标题的不可报标识文案（OPEN 无标识）。
+function statusLabel(a) {
+  if (!a) return ''
+  if (a.status === 'CANCELLED') return '已取消'
+  if (a.status === 'ENDED') return '已结束'
+  if (a.status === 'RUNNING') return '进行中'
+  if (deadlinePassed(a)) return '报名已截止'
+  if (a.status === 'READY') return '报名未开始'
+  return ''
+}
+function isFull(a) {
+  if (!a) return false
+  const formal = a.formal_count ?? a.formal ?? 0
+  const reserved = a.reserved_count ?? a.reserved ?? 0
+  return formal + reserved >= (a.capacity ?? 0)
+}
+// 任务 8（2026-11-10）：当日新发布判断。created_at 是东八区墙钟字符串，
+// 前 10 位即东八区日期；今天的日期按 +08:00 算，与浏览器时区无关。
+function shanghaiTodayStr() {
+  const d = new Date(Date.now() + 8 * 3600 * 1000)
+  return d.toISOString().slice(0, 10)
+}
+function isNewToday(a) {
+  if (!a || !a.created_at) return false
+  const m = String(a.created_at).match(/^(\d{4}-\d{2}-\d{2})/)
+  return !!m && m[1] === shanghaiTodayStr()
+}
+// 任务 5：大厅卡片按钮按「我的状态」变文案。任务 21：已取消活动只写「查看详情」。
+function cardButtonText(a) {
+  if (a.status === 'CANCELLED') return '查看详情'
+  return ['FORMAL', 'WAITING', 'INVITED'].includes(a.my_status) ? '已报名 · 查看详情' : '查看详情 / 报名'
+}
+const seedHint = computed(() => hallTotal.value ? '当前筛选共有 ' + hallTotal.value + ' 个活动。' : '')
+const emptyHint = computed(() => {
+  if (q.value) return `没有找到含「${q.value}」的活动，换个关键词试试`
+  if (campus.value) return `「${campus.value}」校区暂无活动，换个校区试试`
+  if (timeSlot.value) return `「${timeSlot.value}」时段暂无活动，换个时段试试`
+  if (category.value) return `「${category.value}」分类下暂无活动`
+  return '暂无活动，快来发布第一个吧'
+})
+// 任务 13（2026-11-10）：搜索空结果的「去发活动」入口，标题预填搜索词。
+function goPublishWithQuery() {
+  form.value.title = q.value.trim()
+  view.value = 'publish'
+}
+// 任务 15：「我的活动」四个视图（SRS §3.3.7 / SDD CEM-06 的文档要求视图）。
+const myFiltered = computed(() => mine.value.filter(p => p.my_view === myTab.value))
+function myParticipationStatus(p) {
+  if (p.activity_status === 'CANCELLED') return '活动已取消'
+  if (p.status === 'FORMAL' && p.my_view === 'history') return '活动已结束'
+  if (['WAITING', 'INVITED', 'EXPIRED'].includes(p.status) && deadlinePassed(p)) return '报名已截止，未获名额'
+  return p.status === 'INVITED' && !p.invitation_id ? '邀请已过期' : statusText(p.status)
+}
+const participationEventLabels = {
+  SIGNUP: '报名', WITHDRAWAL: '退出', INVITATION_ISSUED: '收到递补邀请',
+  INVITATION_ACCEPTED: '接受递补', INVITATION_DECLINED: '拒绝递补',
+  INVITATION_EXPIRED: '邀请到期', REGISTRATION_CLOSED: '报名截止，未获名额',
+  ACTIVITY_CANCELLED: '活动取消',
+}
+function eventLabel(kind) { return participationEventLabels[kind] || '状态变更' }
+async function toggleParticipationHistory(id) {
+  if (historyId.value === id) { historyId.value = null; return }
+  historyId.value = id
+  historyEvents.value = []
+  try {
+    const events = await api('/api/my/participations/' + id + '/history')
+    if (historyId.value === id) historyEvents.value = events
+  } catch (error) { msg.value = friendlyErr(error) }
+}
+const myEmptyText = computed(() => ({
+  signed: '暂无已报名的活动。', waiting: '暂无候补中的活动。', history: '暂无历史记录。'
+}[myTab.value] || '暂无参与记录。'))
+// 任务 16：通知折叠（前端展示层做，后端不改，见 changes.md 后端分工）。
+// 折叠规则：同一活动 + 同一操作人、类型属于报名/候补/变更/退出，
+// 与组内最新一条间隔 ≤ 30 分钟的连续通知，只展示最新一条并注明折叠条数。
+// 操作人从内容提取：组织者通知以「昵称」开头，本人通知以「你」开头记为「我」。
+// 邀请类通知不折叠（每条邀请有独立的确认截止时间）。
+function notifActor(n) {
+  const m = String(n.content || '').match(/^「([^」]+)」/)
+  return m ? m[1] : '我'
+}
+const FOLDABLE_TYPES = ['报名', '候补', '变更', '退出']
+// 任务 3 返工（2026-11-08）：折叠只在同类型之间发生。旧实现分组 key 只有
+// 活动 + 操作人、且只校验两边类型都在可折叠集合里，报名与退出会被折成一行；
+// 新 key 含类型，且入组条件要求 n.type === g.latest.type。邀请类不参与折叠。
+// 后端已把退出通知 type 统一存「退出」（任务 3 后端部分，历史 11 行已迁移）；
+// '变更' 在可折叠集合里：改时间通知同活动 30 分钟内可折叠，与退出不再混淆
+//（2026-11-09 返工核对：双库快照 0 行「变更」，B 库现存 3 行均为改时间通知）。
+function notifIsNewer(a, b) {
+  const ta = new Date(a.created_at), tb = new Date(b.created_at)
+  return ta > tb || (ta.getTime() === tb.getTime() && (a.id ?? 0) > (b.id ?? 0))
+}
+const groupedNotifs = computed(() => {
+  const groups = []
+  for (const n of notifs.value) {
+    const key = (n.activity_id ?? '') + '|' + notifActor(n) + '|' + n.type
+    const g = groups.find(g => g.key === key
+      && FOLDABLE_TYPES.includes(n.type) && n.type === g.latest.type
+      && Math.abs(new Date(n.created_at) - new Date(g.latest.created_at)) <= 30 * 60 * 1000)
+    if (g) { g.items.push(n); g.count++; if (notifIsNewer(n, g.latest)) g.latest = n } else { groups.push({ key, latest: n, items: [n], count: 1 }) }
+  }
+  return groups
+})
+// 任务 3：折叠行可展开 / 收起（点一下展开被折叠的各条，标题逐条可见）。
+function toggleGroup(key) {
+  const s = new Set(expandedGroups.value)
+  if (s.has(key)) s.delete(key); else s.add(key)
+  expandedGroups.value = s
+}
+// 任务 7：名单视图分组（正式 / 待确认 / 候补；待确认单列）。
+// 任务 16 返工（2026-11-07）：入组时按 created_at（再按 id）取最大者更新
+// g.latest（见上文新版 groupedNotifs；旧实现已由任务 3 返工替换，
+// 30 分钟窗口以组内最新一条（g.latest）为锚点，逻辑不变）。
+// 任务 13：fetch 失败等英文错误转中文提示。
+function friendlyErr(e) {
+  const m = String((e && e.message) || e || '')
+  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return '网络好像断了，请检查网络后重试'
+  return m
+}
+// 任务 12：日期时间文本框解析。接受「2026-11-09 21:00」与
+// 「2026-11-09T21:00」（移动端测试填 T 格式）两种写法，统一显示为空格格式
+// （年-月-日 24 小时制，与下方「已选」行一致）；非法返回 null。
+// 任务 1（2026-11-10）：同时接受后端 ISO 格式（如 2026-11-12T12:00:00.000+08:00，
+// 带秒/毫秒/时区后缀），否则改时间预填全部落空。
+// 后端 LocalDateTime.parse 只认 T 格式，提交时用 toApiDT 转回。
+function parseDTInput(s) {
+  if (!s) return ''
+  const m = String(s).trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$/)
+  if (!m) return null
+  const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5])
+  if (d.getFullYear() !== +m[1] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[3]
+    || d.getHours() !== +m[4] || d.getMinutes() !== +m[5]) return null
+  const p = n => String(n).padStart(2, '0')
+  return `${m[1]}-${p(+m[2])}-${p(+m[3])} ${p(+m[4])}:${p(+m[5])}`
+}
+function toApiDT(s) {
+  const n = parseDTInput(s)
+  return n ? n.replace(' ', 'T') : null
+}
+// 任务 12：失焦时把输入归一化为「年-月-日 时:分」显示格式；非法的不动，
+// 提交时再报格式错误（不打断用户输入）。
+function normalizeDT(target, key) {
+  const obj = target === 'form' ? form.value : rescheduleForm.value
+  if (!obj[key]) return
+  const n = parseDTInput(obj[key])
+  if (n) obj[key] = n
+}
+// 任务 22：标题含星期词但开始时间星期不符时的非阻塞提示（发布时再 confirm 一次）。
+const WEEKDAY_WORDS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六',
+  '星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六']
+function weekdayOfTitle(title) {
+  for (let i = 0; i < WEEKDAY_WORDS.length; i++) {
+    if ((title || '').includes(WEEKDAY_WORDS[i])) return i % 7
+  }
+  return null
+}
+const titleWeekdayHint = computed(() => {
+  const w = weekdayOfTitle(form.value.title)
+  if (w === null) return ''
+  const n = parseDTInput(form.value.start_time)
+  if (!n) return ''
+  const d = new Date(n.replace(' ', 'T'))
+  if (d.getDay() === w) return ''
+  return `标题写${WEEK[w]}，但开始时间是${WEEK[d.getDay()]}，确认无误吗？`
+})
+// 任务 12：自定义日期时间选择器（中文习惯，年-月-日 24 小时制）。
+// 不用浏览器原生 datetime-local：其显示格式跟浏览器 locale 走，
+// en-US 环境下是 mm/dd/yyyy + 12 小时制，与中文「已选」行永远对不上。
+const pickerTitle = computed(() => {
+  if (!picker.value) return ''
+  return { deadline: '选择报名截止', start_time: '选择开始时间', end_time: '选择结束时间' }[picker.value.key] || '选择日期时间'
+})
+const pickerDays = computed(() => new Date(pickerYear.value, pickerMonth.value, 0).getDate())
+const pickerBlanks = computed(() => new Date(pickerYear.value, pickerMonth.value - 1, 1).getDay())
+const pickerDisplay = computed(() => {
+  const p = n => String(n).padStart(2, '0')
+  return `${pickerYear.value}-${p(pickerMonth.value)}-${p(pickerDay.value)} ${WEEK[new Date(pickerYear.value, pickerMonth.value - 1, pickerDay.value).getDay()]} ${periodWord(pickerHour.value)} ${p(pickerHour.value)}:${p(pickerMinute.value)}`
+})
+function openPicker(target, key) {
+  const obj = target === 'form' ? form.value : rescheduleForm.value
+  const cur = parseDTInput(obj[key])
+  const base = cur ? new Date(cur.replace(' ', 'T')) : new Date()
+  if (!cur) { base.setDate(base.getDate() + 1); base.setHours(18, 0, 0, 0) }
+  pickerYear.value = base.getFullYear(); pickerMonth.value = base.getMonth() + 1
+  pickerDay.value = base.getDate(); pickerHour.value = base.getHours(); pickerMinute.value = base.getMinutes()
+  picker.value = { target, key }
+}
+function pickerPrevMonth() {
+  if (pickerMonth.value === 1) { pickerMonth.value = 12; pickerYear.value-- }
+  else pickerMonth.value--
+  if (pickerDay.value > pickerDays.value) pickerDay.value = pickerDays.value
+}
+function pickerNextMonth() {
+  if (pickerMonth.value === 12) { pickerMonth.value = 1; pickerYear.value++ }
+  else pickerMonth.value++
+  if (pickerDay.value > pickerDays.value) pickerDay.value = pickerDays.value
+}
+function confirmPicker() {
+  if (!picker.value) return
+  const p = n => String(n).padStart(2, '0')
+  const v = `${pickerYear.value}-${p(pickerMonth.value)}-${p(pickerDay.value)} ${p(pickerHour.value)}:${p(pickerMinute.value)}`
+  const obj = picker.value.target === 'form' ? form.value : rescheduleForm.value
+  obj[picker.value.key] = v
+  picker.value = null
+}
+async function login() {
+  if (loginBusy.value) return
+  loginBusy.value = true
+  try {
+    const j = await api('/api/login', 'POST', { account: account.value, password: password.value })
+    if (isCapacitor.value) {
+      token.value = j.token
+      localStorage.setItem('token', j.token)
+    } else {
+      token.value = ''
+      localStorage.removeItem('token')
+      if (!csrfCookie()) throw new Error('浏览器未保存会话 Cookie，请检查站点和 HTTPS 设置')
+    }
+    user.value = j.user
+    password.value = ''
+    msg.value = '登录成功'
+    // 登录页是单独一页：登录成功后进大厅（2026-11-10 游客不看内容）。
+    view.value = 'hall'
+    // 任务 18：登录成功横幅 5 秒后自动消失（另有 × 可随时关闭）；其他提示条不受影响。
+    setTimeout(() => { if (msg.value === '登录成功') msg.value = '' }, 5000)
+    // 任务 3（换号串号）：先清掉上一个账号的缓存状态，再拉当前账号的；
+    // 只拉大厅不够——顶栏未读数常驻显示，通知必须登录时就重拉，否则
+    // 停在通知页换号会直接亮出上一个人的列表。
+    clearAccountState(); loadHall(); loadNotif()
+    if (view.value === 'my') { loadMy(); loadOrganized() }
+  } catch (e) { msg.value = friendlyErr(e) } finally { loginBusy.value = false }
+}
+async function quick(a) { account.value = a; password.value = '123456'; await login() }
+async function register() {
+  if (registerBusy.value) return
+  registerBusy.value = true
+  try {
+    await api('/api/register', 'POST', { account: account.value, password: password.value, nickname: nickname.value })
+    await login()
+    // 任务 5：login() 会把提示写成「登录成功」；注册路径须保留「注册成功」。
+    // 任务 18：注册成功横幅同样 5 秒后自动消失。
+    if (user.value) {
+      msg.value = '注册成功，已自动登录'
+      setTimeout(() => { if (msg.value === '注册成功，已自动登录') msg.value = '' }, 5000)
+    }
+  } catch (e) { msg.value = friendlyErr(e) } finally { registerBusy.value = false }
+}
+async function resignup(aid) {
+  try {
+    const j = await confirmedSignup(aid)
+    if (!j) return
+    // 任务 19 返工：重新报名后刷新当前详情（与 signup() 一致）——
+    // 否则详情仍显示已退出（名额 0/6、「报名」按钮），与横幅/接口不一致。
+    // openDetail 会清空 msg，须在它之后设置提示；只刷新当前正打开的同一活动。
+    if (detail.value && (detail.value.id === aid || detail.value.activity_id === aid)) {
+      try { await openDetail(aid) } catch (_) {}
+    }
+    // 任务 14：重新报名也用用户语言，按重新拉到的详情实际状态写（与 signup() 一致）。
+    const st = detail.value?.my_status || j.my_status
+    const rank = detail.value?.my_rank || j.my_rank
+    msg.value = st === 'WAITING'
+      ? (rank ? `你已进入候补队列，第 ${rank} 名` : '你已进入候补队列')
+      : st === 'INVITED' ? '你收到递补邀请，请及时确认' : '你报上了，你是正式成员'
+    // 任务 14：报名提示 5 秒自动消失（与登录横幅一致）；切页时 go() 也会清除。
+    const snapMsg = msg.value
+    setTimeout(() => { if (msg.value === snapMsg) msg.value = '' }, 5000)
+    withdrawNotice.value = null
+    loadMy()
+    loadHall()
+  } catch (e) { msg.value = friendlySignupErr(e) }
+}
+// 任务 19：从退出提示条点「重新报名」。
+async function resignupFromNotice() {
+  if (withdrawNotice.value?.activityId) await resignup(withdrawNotice.value.activityId)
+}
+// 任务 3（换号串号）：按账号缓存的前端状态集中清理——通知列表、
+// 未读数、我的活动（我报名的 + 我组织的）、详情页（含 my_status /
+// 组织者名单，均属当前账号视角）。登录成功后、退出时、token 失效时都走这里。
+function clearAccountState() { hallRequest++; hall.value = []; hallPage.value = 1; hallTotal.value = 0; hallLoading.value = false; organizedPage.value = 1; organizedTotal.value = 0; rosterPages.value = {}; historyId.value = null; historyEvents.value = []; notifPage.value = 1; notifTotal.value = 0; mine.value = []; organized.value = []; notifs.value = []; unread.value = 0; detail.value = null; myMessages.value = []; withdrawNotice.value = null; rosterActivity.value = null; rosterError.value = '' }
+function clearSessionState() {
+  token.value = ''
+  localStorage.removeItem('token')
+  user.value = null
+  clearAccountState()
+  view.value = 'hall'
+}
+async function logout() {
+  try {
+    await api('/api/logout', 'POST')
+    clearSessionState()
+  } catch (e) {
+    msg.value = friendlyErr(e)
+  }
+}
+// UI 配图（2026-11-10，用户定：用通用配图，不按分类配专用图——专用图使用场景有限）。
+// 3 张通用封面按活动 id 轮换，与分类无关；横幅与空状态共用 hero。
+function coverImg(id) {
+  const n = ((Number(id) || 0) % 3) + 1
+  return '/img/cover-' + n + '.webp'
+}
+// Canvas 名额环：正式/容量画成圆环，中心写数字；深色模式换配色。
+// 画布属性 112（CSS 56，2x 清晰度），按 data-formal / data-cap 画。
+function drawCapRings() {
+  const dark = darkMode.value
+  document.querySelectorAll('canvas.cap-ring').forEach(cv => {
+    const formal = Number(cv.dataset.formal), cap = Number(cv.dataset.cap)
+    if (!cap || Number.isNaN(formal)) return
+    const ctx = cv.getContext('2d')
+    const s = cv.width
+    ctx.clearRect(0, 0, s, s)
+    const cx = s / 2, cy = s / 2, r = s / 2 - 9
+    ctx.lineWidth = 10
+    ctx.strokeStyle = dark ? 'rgba(240,239,236,0.18)' : 'rgba(20,20,19,0.12)'
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke()
+    const frac = Math.min(1, formal / cap)
+    if (frac > 0) {
+      ctx.strokeStyle = '#D97757'
+      ctx.lineCap = 'round'
+      ctx.beginPath(); ctx.arc(cx, cy, r, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * frac); ctx.stroke()
+    }
+    ctx.fillStyle = dark ? '#f0efec' : '#141413'
+    ctx.font = '600 26px system-ui, sans-serif'
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+    ctx.fillText(formal + '/' + cap, cx, cy + 1)
+  })
+}
+async function loadHall(page = hallPage.value) {
+  const request = ++hallRequest
+  hallLoading.value = true
+  loadError.value = ''
+  try {
+    const params = new URLSearchParams({ page, size: activityPageSize })
+    if (q.value.trim()) params.set('q', q.value.trim())
+    if (category.value) params.set('category', category.value)
+    if (campus.value) params.set('campus', campus.value)
+    if (timeSlot.value) params.set('period', timeSlot.value)
+    const result = await api('/api/activities?' + params)
+    if (request !== hallRequest) return
+    if (!result.items.length && page > 1) {
+      await loadHall(Math.max(1, Math.ceil(result.total / activityPageSize)))
+      return
+    }
+    hall.value = result.items
+    hallPage.value = result.page
+    hallTotal.value = result.total
+    alignServerClock(result.server_time)
+  } catch (error) {
+    if (request === hallRequest) { loadError.value = friendlyErr(error); hall.value = [] }
+  } finally {
+    if (request === hallRequest) { hallLoading.value = false; await nextTick(); drawCapRings() }
+  }
+}
+function retryHall() { return loadHall() }
+watch([q, category, campus, timeSlot], () => {
+  clearTimeout(hallSearchTimer)
+  if (user.value && view.value === 'hall') {
+    hallRequest++
+    hallSearchTimer = setTimeout(() => loadHall(1), 200)
+  } else {
+    hallPage.value = 1
+  }
+})
+async function openDetail(id) {
+  try {
+    // 记录从哪来（大厅 / 我的活动），详情页返回时回到原地。
+    if (view.value !== 'detail') detailFrom.value = view.value === 'my' ? 'my' : 'hall'
+    const nextDetail = await api('/api/activities/' + id + '?include_roster=false')
+    if (rescheduleSource.value?.id !== nextDetail.id) rescheduleOpen.value = false
+    detail.value = nextDetail
+    alignServerClock(nextDetail.server_time)
+    msg.value = ''
+    // 任务 17（2026-11-10）：非组织者视角拉取本人发过的留言及组织者回复；
+    // 组织者走名单视图的全部留言，不拉此接口。
+    if (user.value && !detail.value.is_organizer) loadMyMessages(id); else myMessages.value = []
+    // 详情是独立页（2026-11-10）：切过去并回到页顶，不再在列表里原地展开、
+    // 不再跳到列表最上方——之前 scrollIntoView 就是用户说的“跳到第一个”。
+    view.value = 'detail'
+    await nextTick()
+    window.scrollTo(0, 0)
+    drawCapRings()
+  } catch (e) { msg.value = friendlyErr(e) }
+}
+// 任务 17（2026-11-10）：GET /api/activities/{id}/messages，本人只返回自己的留言。
+async function loadMyMessages(id) {
+  if (!hasSession()) { myMessages.value = []; return }
+  try { myMessages.value = await api('/api/activities/' + id + '/messages') } catch (_) { myMessages.value = [] }
+}
+async function confirmedSignup(id) {
+  const current = detail.value?.id === id ? detail.value : await api('/api/activities/' + id)
+  if (current.conditions?.trim() && !confirm('请确认已阅读并接受参与条件：\n' + current.conditions)) return null
+  return confirmSchedule('/api/activities/' + id + '/signup', {
+    conditions_confirmed: true,
+    version: current.version,
+  })
+}
+async function signup(id) {
+  if (signupBusy.value) return
+  signupBusy.value = true
+  try {
+    const j = await confirmedSignup(id)
+    if (!j) return
+    // 任务 1 + P1-6：报名返回只含 detail() 的字段（无时间/地点/组织者），
+    // 直接用它覆盖详情会让 P1-6 那行变空白；改走重新拉详情（全字段），
+    // 再置提示（openDetail 会清空 msg，须在它之后设置）。
+    await openDetail(id)
+    // 任务 14：报名成功提示改用户语言，按重新拉到的详情实际状态写。
+    const st = detail.value?.my_status || j.my_status
+    const rank = detail.value?.my_rank || j.my_rank
+    msg.value = st === 'WAITING'
+      ? (rank ? `你已进入候补队列，第 ${rank} 名` : '你已进入候补队列')
+      : st === 'INVITED' ? '你收到递补邀请，请及时确认' : '你报上了，你是正式成员'
+    // 任务 14：报名提示 5 秒自动消失（与登录横幅一致）；切页时 go() 也会清除。
+    const snapMsg = msg.value
+    setTimeout(() => { if (msg.value === snapMsg) msg.value = '' }, 5000)
+    loadHall()
+  } catch (e) { msg.value = friendlySignupErr(e) } finally { signupBusy.value = false }
+}
+// 任务 2：报名失败文案与事实一致——后端仍可能返回「活动不在报名期」
+// （如 READY 未翻回的窗口期），按截止时间翻译，不再原样抛给用户。
+function friendlySignupErr(e) {
+  const m = String((e && e.message) || e || '')
+  if (/活动不在报名期/.test(m)) {
+    if (detail.value && deadlinePassed(detail.value)) return '报名已截止'
+    return '报名未开始，请稍后再试'
+  }
+  if (/已过报名截止时间/.test(m)) return '报名已截止'
+  return friendlyErr(e)
+}
+async function withdraw(pid, aid, title) {
+  try {
+    await api('/api/participations/' + pid + '/withdraw', 'POST')
+    // 任务 3-1：详情刷新会清空提示（openDetail 置空 msg），先等刷新完成再置提示；
+    // 刷新失败也不吞掉「已退出」。
+    if (detail.value) { try { await openDetail(detail.value.id || detail.value.activity_id) } catch (_) {} }
+    // 任务 19：退出提示更明显、停留更久（15 秒）、带重新报名入口；保持一键退出，不加二次确认。
+    withdrawNotice.value = { activityId: aid, title: title || '' }
+    msg.value = ''
+    const snap = withdrawNotice.value
+    setTimeout(() => { if (withdrawNotice.value === snap) withdrawNotice.value = null }, 15000)
+    if (view.value === 'my') { loadMy(); loadOrganized() } else { loadHall() }
+  } catch (e) { msg.value = e.message }
+}
 async function openRoster(id) {
   rosterError.value = ''
   rosterActivity.value = null
@@ -425,7 +1092,25 @@ async function loadRosterPage(status, page) {
     if (rosterActivity.value?.id === id) rosterPages.value[status] = result
   } catch (e) { rosterError.value = friendlyErr(e) }
 }
-async function accept(id) { try { await api('/api/invitations/' + id + '/accept', 'POST'); msg.value = '已接受递补'; if (detail.value) openDetail(detail.value.id || detail.value.activity_id); loadMy() } catch (e) { msg.value = e.message } }
+async function confirmSchedule(path, payload = {}) {
+  try {
+    return await api(path, 'POST', payload)
+  } catch (error) {
+    if (error.code !== 'SCHEDULE_CONFLICT') throw error
+    const times = error.conflicts.map(activity =>
+      activity.title + '　' + fmtWeek(activity.start_time) + ' 至 ' + fmtWeek(activity.end_time))
+    if (!confirm('与以下已报名活动时间重叠，是否继续？\n' + times.join('\n'))) return null
+    return api(path, 'POST', { ...payload, confirmed_conflicts: error.conflicts.map(activity => activity.id) })
+  }
+}
+async function accept(id) {
+  try {
+    if (!await confirmSchedule('/api/invitations/' + id + '/accept')) return
+    if (detail.value) await openDetail(detail.value.id || detail.value.activity_id)
+    msg.value = '已接受递补'
+    loadMy()
+  } catch (e) { msg.value = e.message }
+}
 async function reject(id) { try { await api('/api/invitations/' + id + '/reject', 'POST'); msg.value = '已拒绝递补'; if (detail.value) openDetail(detail.value.id || detail.value.activity_id); loadMy() } catch (e) { msg.value = e.message } }
 async function loadMy() { try { mine.value = await api('/api/my') } catch (e) { msg.value = e.message } }
 async function loadOrganized(page = organizedPage.value) {
@@ -547,7 +1232,15 @@ async function submitReschedule(id) {
       const seconds = formatted === toApiDT(original) ? String(original).slice(17, 19) : '00'
       fields[key] = formatted + ':' + (seconds || '00')
     }
-    const result = await api('/api/activities/' + id, 'PUT', fields)
+    const path = '/api/activities/' + id
+    let result
+    try {
+      result = await api(path, 'PUT', fields)
+    } catch (error) {
+      if (error.code !== 'RESCHEDULE_TIME_CONFLICT') throw error
+      if (!confirm('改期会与 ' + error.affected + ' 位正式成员的其他活动重叠，是否继续？')) return
+      result = await api(path, 'PUT', { ...fields, confirmed_conflict_count: error.affected })
+    }
     rescheduleOpen.value = false
     await openDetail(id)
     msg.value = Object.keys(result.changes).length ? '活动已修改，已通知 ' + result.affected + ' 人' : '活动资料没有变化'

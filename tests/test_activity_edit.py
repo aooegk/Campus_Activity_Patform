@@ -3,10 +3,11 @@
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
-from test_api import DEADLINE, END, START, detail, login, req
+from test_api import DEADLINE, END, START, authed_reset, detail, login, req
 
 
 def main():
+    authed_reset()
     org, a, b, c = map(login, ("organizer", "demo01", "demo02", "demo03"))
     activity = {
         "title": "活动编辑验收",
