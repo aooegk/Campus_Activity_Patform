@@ -93,8 +93,8 @@ PostgreSQL 16（6 张表，见 2.2）
 
 ### 2.5 接口清单（统一前缀 /api，错误统一 `{ok:false,error}`）
 GET /health；POST /login、/logout、/register；GET /me；
-GET /activities（q、category 过滤，带正式 / 候补 / 预留计数与本人状态）；
-GET /activities/{id}（返回活动版本，组织者额外取得名单与待确认邀请）；
+GET /activities（支持搜索、类别、校区、时段和分页，带正式 / 候补 / 预留计数与本人状态）；
+GET /activities/{id}（返回活动版本，组织者可取得名单）；GET /activities/{id}/roster（组织者按状态分页查询）；
 POST /activities、PUT /activities/{id}（版本和修改原因）、POST /activities/{id}/cancel（版本、取消原因、确认与受影响人数）；
 POST /activities/{id}/signup（有参与条件时携带确认标志）、POST /participations/{id}/withdraw；
 POST /invitations/{id}/accept、/reject；
@@ -149,7 +149,7 @@ C“周末学习组”上限 10（2 正式）。时间均为相对启动时刻 +
 
 ### 3.5 已知局限（不回避）
 - 浏览器使用持久化 Cookie 会话，写请求携带 CSRF 令牌。移动端兼容 Bearer 令牌。公网部署需使用 HTTPS，并配置 `SESSION_SECURE=true`。
-- 大厅仍返回全量结果。通知已提供每页最多 50 条的分页查询。
+- 大厅、我发布的活动、组织者名单和通知支持分页，每页最多 50 条。
 - 无管理后台与评价接口（P2），表已预留，属后续工作。
 - 演示重置接口 `/demo/reset` 默认关闭。仅对独立演示库配置 `DEMO_ENABLED=true`，登录后可重置。
 

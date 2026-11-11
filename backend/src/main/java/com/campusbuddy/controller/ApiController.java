@@ -1,6 +1,7 @@
 package com.campusbuddy.controller;
 
 import com.campusbuddy.model.ActivityFields;
+import com.campusbuddy.service.ActivityQueries;
 import com.campusbuddy.service.AuthService;
 import com.campusbuddy.service.BuddyService;
 import com.campusbuddy.service.CommandReceipts;
@@ -33,16 +34,19 @@ public class ApiController {
     private final AuthService auth;
     private final BuddyService buddy;
     private final CommandReceipts receipts;
+    private final ActivityQueries activityQueries;
     private final boolean demoEnabled;
     private final boolean secureSessionCookie;
 
     public ApiController(JdbcTemplate jdbc, AuthService auth, BuddyService buddy, CommandReceipts receipts,
+                         ActivityQueries activityQueries,
                          @Value("${app.demo-enabled:false}") boolean demoEnabled,
                          @Value("${app.secure-session-cookie:false}") boolean secureSessionCookie) {
         this.jdbc = jdbc;
         this.auth = auth;
         this.buddy = buddy;
         this.receipts = receipts;
+        this.activityQueries = activityQueries;
         this.demoEnabled = demoEnabled;
         this.secureSessionCookie = secureSessionCookie;
     }
@@ -152,42 +156,25 @@ public class ApiController {
 
     // ---- 活动大厅 ----
     @GetMapping("/activities")
-    public List<Map<String, Object>> activities(
-            @RequestParam(required = false) String q,
-            @RequestParam(required = false) String category,
+    public Object activities(@RequestParam(required = false) String q,
+            @RequestParam(required = false) String category, @RequestParam(required = false) String campus,
+            @RequestParam(required = false) String period, @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size,
             @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
-        Long me = actor;
-        Timestamp now = Timestamp.valueOf(LocalDateTime.now());
-        String sql = "SELECT a.*, u.nickname AS organizer_name, " +
-                "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='FORMAL') AS formal_count, " +
-                "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='WAITING') AS waiting_count, " +
-                "(SELECT COUNT(*) FROM invitation i JOIN participation p ON p.id=i.participation_id " +
-                "WHERE p.activity_id=a.id AND i.status='PENDING' AND i.expires_at > ?) AS reserved_count";
-        List<Object> args = new ArrayList<>();
-        args.add(now);
-        if (me != null) sql += ", mine.status AS my_status";
-        sql += " FROM activity a JOIN app_user u ON u.id=a.organizer_id ";
-        if (me != null) {
-            sql += "LEFT JOIN participation mine ON mine.activity_id=a.id AND mine.user_id=? ";
-            args.add(me);
-        }
-        sql += "WHERE a.status NOT IN ('CANCELLED','ENDED') AND a.end_time > ? ";
-        args.add(now);
-        if (q != null && !q.isBlank()) {
-            sql += "AND a.title LIKE ? ";
-            args.add("%" + q.trim() + "%");
-        }
-        if (category != null && !category.isBlank() && !"全部".equals(category)) {
-            sql += "AND a.category = ? ";
-            args.add(category);
-        }
-        sql += "ORDER BY a.created_at DESC, a.id DESC";
-        return jdbc.queryForList(sql, args.toArray());
+        return activityQueries.lobby(actor, q, category, campus, period, page, size);
+    }
+
+    @GetMapping("/activities/{id}/roster")
+    public Map<String, Object> roster(@PathVariable long id, @RequestParam(defaultValue = "FORMAL") String status,
+            @RequestParam(required = false) Integer page, @RequestParam(required = false) Integer size,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        return activityQueries.roster(id, require(actor), status, page, size);
     }
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     @GetMapping("/activities/{id}")
     public Map<String, Object> activityDetail(@PathVariable long id,
+            @RequestParam(name = "include_roster", defaultValue = "true") boolean includeRoster,
             @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
         Long me = actor;
         LocalDateTime now = LocalDateTime.now();
@@ -204,7 +191,8 @@ public class ApiController {
         if (archived && !organizer && !out.containsKey("participation_id"))
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "活动不存在或仅向历史参与者开放");
 
-        if (organizer) {
+        out.put("is_organizer", organizer);
+        if (organizer && includeRoster) {
             out.put("roster", jdbc.queryForList(
                     "SELECT p.*, u.nickname FROM participation p JOIN app_user u ON u.id=p.user_id " +
                     "WHERE p.activity_id=? AND (p.status='FORMAL' OR (? AND (p.status='WAITING' OR " +
@@ -216,9 +204,8 @@ public class ApiController {
                     "SELECT i.*, u.nickname FROM invitation i JOIN participation p ON p.id=i.participation_id " +
                     "JOIN app_user u ON u.id=p.user_id WHERE p.activity_id=? AND i.status='PENDING' " +
                     "AND i.expires_at > ? ORDER BY i.expires_at, i.id", id, timestamp) : List.of());
-            // 任务 9（2026-11-09）：站内留言只在组织者视角返回，不上公开详情页。
-            out.put("messages", buddy.listMessages(id));
         }
+        if (organizer) out.put("messages", buddy.listMessages(id));
         return out;
     }
 
@@ -444,16 +431,10 @@ public class ApiController {
     // 任务 2：我组织的活动（带正式/候补/预留人数）。新接口，不改 /api/my 的返回形状
     // （测试与前端都按列表使用它），苏晴在前端另调此接口渲染「我组织的」一栏。
     @GetMapping("/my/organized")
-    public List<Map<String, Object>> myOrganized(@RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
-        long me = require(actor);
-        return jdbc.queryForList(
-                "SELECT a.*, " +
-                "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='FORMAL') AS formal_count, " +
-                "(SELECT COUNT(*) FROM participation p WHERE p.activity_id=a.id AND p.status='WAITING') AS waiting_count, " +
-                "(SELECT COUNT(*) FROM invitation i JOIN participation p ON p.id=i.participation_id " +
-                " WHERE p.activity_id=a.id AND i.status='PENDING' AND i.expires_at > ?) AS reserved_count " +
-                "FROM activity a WHERE a.organizer_id=? ORDER BY a.start_time, a.id",
-                Timestamp.valueOf(LocalDateTime.now()), me);
+    public Object myOrganized(@RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer size,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        return activityQueries.organized(require(actor), page, size);
     }
 
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
