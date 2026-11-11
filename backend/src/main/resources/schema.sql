@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS activity (
     created_at   TIMESTAMP NOT NULL DEFAULT now(),
     updated_at   TIMESTAMP NOT NULL DEFAULT now(),
     version      BIGINT NOT NULL DEFAULT 0,
+    cancel_reason VARCHAR(500),
     CHECK (deadline <= start_time AND start_time < end_time)
 );
 

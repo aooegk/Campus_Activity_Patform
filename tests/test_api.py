@@ -66,9 +66,9 @@ def main():
     check("种子活动 A 上限 4、已有 3 正式", a["formal_count"] == 3 and a["capacity"] == 4, str(a))
 
     # 报名：demo04 正式、demo05/06 候补
-    r4 = req("POST", f"/activities/{aid}/signup", token=toks["demo04"])
-    r5 = req("POST", f"/activities/{aid}/signup", token=toks["demo05"])
-    r6 = req("POST", f"/activities/{aid}/signup", token=toks["demo06"])
+    r4 = req("POST", f"/activities/{aid}/signup", token=toks["demo04"], body={"conditions_confirmed": True})
+    r5 = req("POST", f"/activities/{aid}/signup", token=toks["demo05"], body={"conditions_confirmed": True})
+    r6 = req("POST", f"/activities/{aid}/signup", token=toks["demo06"], body={"conditions_confirmed": True})
     check("第 4 人报名转正式", r4.get("my_status") == "FORMAL", str(r4))
     check("第 5 人报名转候补第 1", r5.get("my_status") == "WAITING" and r5.get("my_rank") == 1, str(r5))
     check("第 6 人报名转候补第 2", r6.get("my_status") == "WAITING" and r6.get("my_rank") == 2, str(r6))
@@ -93,7 +93,7 @@ def main():
     p5 = [p for p in my(toks["demo05"])["participations"] if p["activity_id"] == aid][0]
     req("POST", f"/participations/{p5['id']}/withdraw", token=toks["demo05"])
     # 先让 demo07 排队（此时 demo06 已是 INVITED，demo07 为候补）
-    r7 = req("POST", f"/activities/{aid}/signup", token=toks["demo07"])
+    r7 = req("POST", f"/activities/{aid}/signup", token=toks["demo07"], body={"conditions_confirmed": True})
     check("demo07 报名为候补", r7.get("my_status") == "WAITING", str(r7))
     old_inv = detail(toks["demo06"], aid)["invitation_id"]
     print("  等待邀请超时（TTL 10s + 扫描）约 15 秒……")

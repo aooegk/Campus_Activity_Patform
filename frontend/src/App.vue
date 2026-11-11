@@ -133,7 +133,7 @@
           <p class="hint">递补：有人退出空出名额时，按候补顺序邀请下一位参加。</p>
           <p class="hint">预留：已发出递补邀请、等对方确认的名额；对方确认后转为正式，过期则顺延给下一位候补。</p>
         </details>
-        <p v-if="detail.status === 'CANCELLED'" class="info-line"><b>该活动已取消</b></p>
+        <p v-if="detail.status === 'CANCELLED'" class="info-line"><b>该活动已取消</b><span v-if="detail.cancel_reason">　{{ detail.cancel_reason }}</span></p>
         <div v-if="user && detail.status !== 'CANCELLED' && !detail.roster" class="message-box">
           <label class="field-label" for="message-draft">给组织者留言</label>
           <input id="message-draft" v-model="messageDraft" placeholder="如：请问场地有电梯吗？" maxlength="200" />
@@ -168,7 +168,7 @@
             <p v-if="!detail.messages.length" class="meta">暂无留言。</p>
           </div>
           <template v-if="detail.status !== 'CANCELLED'">
-            <button v-if="parseShanghai(detail.start_time) > nowTick" class="warn" @click="cancelActivity(detail.id)">取消活动</button>
+            <button v-if="parseShanghai(detail.end_time) > nowTick" class="warn" @click="cancelActivity(detail.id)">取消活动</button>
             <button v-if="detail.status === 'OPEN' && !deadlinePassed(detail)" class="ghost" @click="openReschedule(detail)">修改活动</button>
             <button v-if="detail.status === 'OPEN' && deadlinePassed(detail)" class="ghost" disabled>报名已截止，无法修改</button>
           </template>
@@ -925,7 +925,8 @@ async function register() {
 }
 async function resignup(aid) {
   try {
-    const j = await api('/api/activities/' + aid + '/signup', 'POST')
+    const j = await confirmedSignup(aid)
+    if (!j) return
     // 任务 19 返工：重新报名后刷新当前详情（与 signup() 一致）——
     // 否则详情仍显示已退出（名额 0/6、「报名」按钮），与横幅/接口不一致。
     // openDetail 会清空 msg，须在它之后设置提示；只刷新当前正打开的同一活动。
@@ -1037,11 +1038,20 @@ async function loadMyMessages(id) {
   if (!hasSession()) { myMessages.value = []; return }
   try { myMessages.value = await api('/api/activities/' + id + '/messages') } catch (_) { myMessages.value = [] }
 }
+async function confirmedSignup(id) {
+  const current = detail.value?.id === id ? detail.value : await api('/api/activities/' + id)
+  if (current.conditions?.trim() && !confirm('请确认已阅读并接受参与条件：\n' + current.conditions)) return null
+  return api('/api/activities/' + id + '/signup', 'POST', {
+    conditions_confirmed: true,
+    version: current.version,
+  })
+}
 async function signup(id) {
   if (signupBusy.value) return
   signupBusy.value = true
   try {
-    const j = await api('/api/activities/' + id + '/signup', 'POST')
+    const j = await confirmedSignup(id)
+    if (!j) return
     // 任务 1 + P1-6：报名返回只含 detail() 的字段（无时间/地点/组织者），
     // 直接用它覆盖详情会让 P1-6 那行变空白；改走重新拉详情（全字段），
     // 再置提示（openDetail 会清空 msg，须在它之后设置）。
@@ -1121,9 +1131,20 @@ async function readAll() {
   catch (e) { msg.value = friendlyErr(e) }
 }
 async function cancelActivity(id) {
-  if (!confirm('确认取消该活动吗？')) return
+  const activity = detail.value
+  const reason = prompt('填写取消原因（10–500 字）')?.trim()
+  if (reason === undefined) return
+  const length = [...reason].length
+  if (length < 10 || length > 500) { msg.value = '取消原因需为 10–500 字'; return }
+  const affected = activity.formal + activity.waiting + activity.reserved
+  if (!confirm('确认取消「' + activity.title + '」？系统将通知 ' + affected + ' 位参与者。')) return
   try {
-    await api('/api/activities/' + id + '/cancel', 'POST')
+    await api('/api/activities/' + id + '/cancel', 'POST', {
+      confirmed: true,
+      reason,
+      version: activity.version,
+      expected_affected: affected,
+    })
     // 任务 20：取消后详情卡片立即刷新为已取消态（openDetail 会清空 msg，须在它之后设置提示）。
     if (detail.value && (detail.value.id === id || detail.value.activity_id === id)) {
       try { await openDetail(id) } catch (_) {}
@@ -1133,7 +1154,10 @@ async function cancelActivity(id) {
     setTimeout(() => { if (msg.value === snapMsg) msg.value = '' }, 5000)
     loadHall()
     if (view.value === 'my') { loadMy(); loadOrganized() }
-  } catch (e) { msg.value = e.message }
+  } catch (e) {
+    if (['ACTIVITY_VERSION_CONFLICT', 'ACTIVITY_IMPACT_CHANGED'].includes(e.code)) await openDetail(id)
+    msg.value = friendlyErr(e)
+  }
 }
 async function publish() {
   if (publishBusy.value) return

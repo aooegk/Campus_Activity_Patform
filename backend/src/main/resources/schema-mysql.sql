@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS activity (
     created_at   DATETIME NOT NULL DEFAULT NOW(),
     updated_at   DATETIME NOT NULL DEFAULT NOW(),
     version      BIGINT NOT NULL DEFAULT 0,
+    cancel_reason VARCHAR(500),
     CHECK (deadline <= start_time AND start_time < end_time)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 

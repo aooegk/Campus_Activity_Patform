@@ -90,7 +90,9 @@ check("过期后重新报名成功（复用同一记录、不产生第二条）"
       re.get("my_status") in ("FORMAL", "WAITING") and len([p for p in my(d3) if p["activity_id"] == aid]) == 1, str(re))
 
 # 7 组织者取消活动
-c = req("POST", f"/activities/{aid}/cancel", token=org)
+c = req("POST", f"/activities/{aid}/cancel", token=org, body={
+    "version": 0, "confirmed": True, "reason": "活动场地临时关闭，需要取消本次活动",
+})
 check("组织者取消活动", c.get("ok") is True, str(c))
 det = req("GET", f"/activities/{aid}", token=org)
 check("取消后活动状态为 CANCELLED", det["status"] == "CANCELLED", str(det["status"]))

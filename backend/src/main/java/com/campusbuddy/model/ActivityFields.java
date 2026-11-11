@@ -42,7 +42,7 @@ public record ActivityFields(String title, String category, String description, 
     public static String reason(Map<String, Object> body) {
         String reason = text(body, "reason", "").strip();
         if (length(reason) < 10 || length(reason) > 500)
-            throw new IllegalStateException("修改原因需为 10-500 字");
+            throw new IllegalStateException("原因需为 10-500 字");
         return reason;
     }
 

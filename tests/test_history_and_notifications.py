@@ -46,7 +46,9 @@ def main():
         "INVITATION_ACCEPTED", "INVITATION_ISSUED", "SIGNUP",
     ]
 
-    assert req("POST", path + "/cancel", token=org)["ok"]
+    assert req("POST", path + "/cancel", token=org, body={
+        "version": 0, "confirmed": True, "reason": "活动场地临时关闭，需要取消本次活动",
+    })["ok"]
     assert detail(outsider, aid)["ok"] is False
     assert detail(waiting, aid)["my_status"] == "CANCELLED"
     assert req("GET", trail, token=waiting)[0]["change_kind"] == "ACTIVITY_CANCELLED"

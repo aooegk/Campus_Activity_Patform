@@ -229,13 +229,15 @@ public class BuddyService {
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public Map<String, Object> signup(long activityId, long userId) {
+    public Map<String, Object> signup(long activityId, long userId, boolean confirmed, Long version) {
         var act = lockActivity(activityId);
         LocalDateTime now = LocalDateTime.now();
         if (!"OPEN".equals(act.get("status")))
             throw new IllegalStateException("活动不在报名期");
         if (!now.isBefore(asLocalDateTime(act.get("deadline"))))
             throw new IllegalStateException("已过报名截止时间");
+        if (version != null && version != ((Number) act.get("version")).longValue())
+            return versionConflict(act);
         expireDueInvitations(activityId, now, (String) act.get("title"));
         promote(activityId, act, now);
         var existing = jdbc.queryForList(
@@ -248,6 +250,8 @@ public class BuddyService {
             }
             // 退出/过期后重新报名：复用同一条记录，候补时间重置（SRS 3.3.5.2）
         }
+        if (!confirmed && !((String) act.get("conditions")).isBlank())
+            throw new IllegalStateException("请阅读并确认活动参与条件");
         int capacity = ((Number) act.get("capacity")).intValue();
         boolean hasQueue = waitingCount(activityId) > 0;
         int occupied = formalCount(activityId) + reservedCount(activityId, now);
@@ -440,42 +444,48 @@ public class BuddyService {
         }
     }
 
-    /** 任务 1（2026-11-09，P0）：组织者取消活动时给全部受影响成员发取消通知。
-     *  SDD §6.8 通知矩阵：取消通知所有受影响成员。收件人 = 取消前状态为
-     *  FORMAL / WAITING / INVITED 的全部参与者（含组织者本人作为参与者时，
-     *  考研党复现用例就是组织者本人既是发布者又是参与者；不含已退出/已过期者）。
-     *  内容写清原定时间（起止 + 星期 + 时段词，与任务 6 同口径）。
-     *  event_key 按 (活动, 用户) 去重；已取消活动二次取消时收件人为空，
-     *  不重发、仍返回 ok（幂等，任务 20 后端口径）。 */
-    @Transactional
-    public Map<String, Object> cancelActivity(long activityId, long userId) {
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> cancelActivity(long activityId, long userId, long version, String reason,
+                                              Integer expectedAffected) {
         var act = lockActivity(activityId);
         LocalDateTime now = LocalDateTime.now();
         if (((Number) act.get("organizer_id")).longValue() != userId)
             throw new IllegalStateException("只有组织者可以取消活动");
-        if ("CANCELLED".equals(act.get("status"))) return Map.of("ok", true);
-        if (!now.isBefore(asLocalDateTime(act.get("start_time"))))
-            throw new IllegalStateException("活动已开始，不能取消");
+        if ("CANCELLED".equals(act.get("status")))
+            return Map.of("ok", true, "version", act.get("version"));
+        if (version != ((Number) act.get("version")).longValue()) return versionConflict(act);
+        if ("ENDED".equals(act.get("status")) || !now.isBefore(asLocalDateTime(act.get("end_time"))))
+            throw new IllegalStateException("活动已结束，不能取消");
+
         expireDueInvitations(activityId, now, (String) act.get("title"));
         if (!now.isBefore(asLocalDateTime(act.get("deadline")))) closeWaiting(activityId, now);
         var recipients = jdbc.queryForList(
                 "SELECT id, user_id, status FROM participation WHERE activity_id=? AND status IN ('FORMAL','WAITING','INVITED')",
                 activityId);
-        jdbc.update("UPDATE activity SET status='CANCELLED', updated_at=?, version=version+1 WHERE id=?",
-                ts(now), activityId);
+        if (expectedAffected != null && expectedAffected != recipients.size()) {
+            return Map.of("ok", false, "code", "ACTIVITY_IMPACT_CHANGED",
+                    "error", "受影响人数已变化，请重新确认", "affected", recipients.size());
+        }
+
+        jdbc.update("UPDATE activity SET status='CANCELLED', cancel_reason=?, updated_at=?, version=version+1 WHERE id=?",
+                reason, ts(now), activityId);
+        jdbc.update("UPDATE notification SET read_at=? WHERE read_at IS NULL AND invitation_id IN " +
+                "(SELECT i.id FROM invitation i JOIN participation p ON p.id=i.participation_id " +
+                "WHERE p.activity_id=? AND i.status='PENDING')", ts(now), activityId);
         jdbc.update("UPDATE invitation SET status='INVALID', responded_at=? WHERE participation_id IN " +
                 "(SELECT id FROM participation WHERE activity_id=?) AND status='PENDING'", ts(now), activityId);
         String range = fmtFullRange(asLocalDateTime(act.get("start_time")), asLocalDateTime(act.get("end_time")));
         String title = (String) act.get("title");
-        for (var p : recipients) {
-            long uid = ((Number) p.get("user_id")).longValue();
-            transition(((Number) p.get("id")).longValue(), (String) p.get("status"),
+        for (var participant : recipients) {
+            long member = ((Number) participant.get("user_id")).longValue();
+            transition(((Number) participant.get("id")).longValue(), (String) participant.get("status"),
                     "CANCELLED", "ACTIVITY_CANCELLED", now);
-            notify(uid, activityId, null, "取消",
-                    "活动「" + title + "」已取消，原定时间 " + range + "，地点 " + act.get("location") + "。",
-                    "notify:cancel:" + activityId + ":" + uid);
+            notify(member, activityId, null, "取消",
+                    "活动「" + title + "」已取消，原定时间 " + range + "，地点 " + act.get("location") +
+                            "。原因：" + reason,
+                    "notify:cancel:" + activityId + ":" + member);
         }
-        return Map.of("ok", true);
+        return Map.of("ok", true, "affected", recipients.size(), "version", version + 1);
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -483,10 +493,7 @@ public class BuddyService {
                                                ActivityFields fields, String reason) {
         var act = lockActivity(activityId);
         requireOrganizer(act, organizerId);
-        if (version != ((Number) act.get("version")).longValue()) {
-            return Map.of("ok", false, "code", "ACTIVITY_VERSION_CONFLICT",
-                    "error", "活动已更新，请重新读取详情后修改", "version", act.get("version"));
-        }
+        if (version != ((Number) act.get("version")).longValue()) return versionConflict(act);
         return saveActivityUpdate(activityId, act, fields, reason);
     }
 
@@ -499,6 +506,11 @@ public class BuddyService {
                 (String) act.get("description"), (String) act.get("conditions"), (String) act.get("location"),
                 ((Number) act.get("capacity")).intValue(), deadline, start, end);
         return saveActivityUpdate(activityId, act, fields, "");
+    }
+
+    private Map<String, Object> versionConflict(Map<String, Object> act) {
+        return Map.of("ok", false, "code", "ACTIVITY_VERSION_CONFLICT",
+                "error", "活动已更新，请重新读取详情", "version", act.get("version"));
     }
 
     private void requireOrganizer(Map<String, Object> act, long organizerId) {

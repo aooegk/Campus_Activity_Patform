@@ -95,8 +95,8 @@ PostgreSQL 16（6 张表，见 2.2）
 GET /health；POST /login、/logout、/register；GET /me；
 GET /activities（q、category 过滤，带正式 / 候补 / 预留计数与本人状态）；
 GET /activities/{id}（返回活动版本，组织者额外取得名单与待确认邀请）；
-POST /activities、PUT /activities/{id}（携带 version 与修改原因）、POST /activities/{id}/cancel；
-POST /activities/{id}/signup、POST /participations/{id}/withdraw；
+POST /activities、PUT /activities/{id}（版本和修改原因）、POST /activities/{id}/cancel（版本、取消原因、确认与受影响人数）；
+POST /activities/{id}/signup（有参与条件时携带确认标志）、POST /participations/{id}/withdraw；
 POST /invitations/{id}/accept、/reject；
 GET /my、GET /my/participations/{id}/history；
 GET /notifications（支持分页）、POST /notifications/{id}/read、POST /notifications/read-all、POST /demo/reset（仅演示）。

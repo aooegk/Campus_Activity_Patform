@@ -261,11 +261,24 @@ public class ApiController {
 
     @PostMapping("/activities/{id}/cancel")
     public ResponseEntity<Map<String, Object>> cancel(@PathVariable long id,
+            @RequestBody(required = false) Map<String, Object> body,
             @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor,
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
         long me = require(actor);
-        return receipts.execute(me, key, "POST /activities/" + id + "/cancel", null,
-                () -> ResponseEntity.ok(buddy.cancelActivity(id, me)));
+        return receipts.execute(me, key, "POST /activities/" + id + "/cancel", body, () -> {
+            if (body == null || !Boolean.TRUE.equals(body.get("confirmed")))
+                throw new IllegalStateException("请确认取消活动");
+            Integer affected = null;
+            if (body.get("expected_affected") != null) {
+                try {
+                    affected = Integer.parseInt(String.valueOf(body.get("expected_affected")));
+                    if (affected < 0) throw new NumberFormatException();
+                } catch (NumberFormatException e) {
+                    throw new IllegalStateException("受影响人数格式不正确");
+                }
+            }
+            return commandResponse(buddy.cancelActivity(id, me, activityVersion(body), ActivityFields.reason(body), affected));
+        });
     }
 
     @PutMapping("/activities/{id}")
@@ -275,17 +288,25 @@ public class ApiController {
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
         long me = require(actor);
         return receipts.execute(me, key, "PUT /activities/" + id, body, () -> {
-            long version;
-            try {
-                version = Long.parseLong(String.valueOf(body.get("version")));
-            } catch (NumberFormatException e) {
-                throw new IllegalStateException("缺少有效活动版本，请刷新详情");
-            }
-            var result = buddy.updateActivity(id, me, version, ActivityFields.from(body), ActivityFields.reason(body));
-            return Boolean.FALSE.equals(result.get("ok"))
-                    ? ResponseEntity.status(HttpStatus.CONFLICT).body(result)
-                    : ResponseEntity.ok(result);
+            return commandResponse(buddy.updateActivity(id, me, activityVersion(body),
+                    ActivityFields.from(body), ActivityFields.reason(body)));
         });
+    }
+
+    private long activityVersion(Map<String, Object> body) {
+        try {
+            long version = Long.parseLong(String.valueOf(body.get("version")));
+            if (version < 0) throw new NumberFormatException();
+            return version;
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("缺少有效活动版本，请刷新详情");
+        }
+    }
+
+    private ResponseEntity<Map<String, Object>> commandResponse(Map<String, Object> result) {
+        return Boolean.FALSE.equals(result.get("ok"))
+                ? ResponseEntity.status(HttpStatus.CONFLICT).body(result)
+                : ResponseEntity.ok(result);
     }
 
     @PostMapping("/activities/{id}/reschedule")
@@ -331,11 +352,15 @@ public class ApiController {
     // ---- 报名 / 退出 / 递补 ----
     @PostMapping("/activities/{id}/signup")
     public ResponseEntity<Map<String, Object>> signup(@PathVariable long id,
+            @RequestBody(required = false) Map<String, Object> body,
             @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor,
             @RequestHeader(value = "Idempotency-Key", required = false) String key) {
         long me = require(actor);
-        return receipts.execute(me, key, "POST /activities/" + id + "/signup", null,
-                () -> ResponseEntity.ok(buddy.signup(id, me)));
+        return receipts.execute(me, key, "POST /activities/" + id + "/signup", body, () -> {
+            boolean confirmed = body != null && Boolean.TRUE.equals(body.get("conditions_confirmed"));
+            Long version = body != null && body.get("version") != null ? activityVersion(body) : null;
+            return commandResponse(buddy.signup(id, me, confirmed, version));
+        });
     }
 
     @PostMapping("/participations/{id}/withdraw")
