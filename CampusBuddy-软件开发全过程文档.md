@@ -94,8 +94,8 @@ PostgreSQL 16（6 张表，见 2.2）
 ### 2.5 接口清单（统一前缀 /api，错误统一 `{ok:false,error}`）
 GET /health；POST /login、/register；GET /me；
 GET /activities（q、category 过滤，带正式 / 候补 / 预留计数与本人状态）；
-GET /activities/{id}（组织者额外返回名单与待确认邀请）；
-POST /activities、POST /activities/{id}/cancel；
+GET /activities/{id}（返回活动版本，组织者额外取得名单与待确认邀请）；
+POST /activities、PUT /activities/{id}（携带 version 与修改原因）、POST /activities/{id}/cancel；
 POST /activities/{id}/signup、POST /participations/{id}/withdraw；
 POST /invitations/{id}/accept、/reject；
 GET /my、GET /notifications、POST /notifications/read-all、POST /demo/reset（仅演示）。
@@ -148,7 +148,7 @@ C“周末学习组”上限 10（2 正式）。时间均为相对启动时刻 +
 - 会话为演示级内存 token，未做持久化与刷新；生产需换 JWT / 服务端会话 + HTTPS。
 - 无分页：大厅与通知各取全量 / 前 50 条，演示规模够用。
 - 无管理后台与评价接口（P2），表已预留，属后续工作。
-- 演示重置接口 `/demo/reset` 会清空业务数据，仅用于课堂演示，上线前必须删除或鉴权。
+- 演示重置接口 `/demo/reset` 默认关闭。仅对独立演示库配置 `DEMO_ENABLED=true`，登录后可重置。
 
 ---
 
@@ -188,6 +188,8 @@ C“周末学习组”上限 10（2 正式）。时间均为相对启动时刻 +
 Windows 上的浏览器打开方式见 5.1。
 
 ### 4.3 缺陷与修复记录
+
+2026-11-11 起的变更与验收结果见 [CHANGELOG.md](CHANGELOG.md)。
 - 构建期 Maven 走代理失败：根因是 Java 不读环境变量代理且 IPv6 隧道解析失败，
   改为代理配置 + 强制 IPv4 + 代理证书导入信任库后打包成功（BUILD-NOTES.md）。
 - 种子建表中文约束乱码：根因是本机 locale 为 POSIX、Java 默认字符集非 UTF-8，

@@ -1,5 +1,6 @@
 package com.campusbuddy.service;
 
+import com.campusbuddy.model.ActivityFields;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
@@ -436,7 +437,7 @@ public class BuddyService {
         var recipients = jdbc.queryForList(
                 "SELECT user_id FROM participation WHERE activity_id=? AND status IN ('FORMAL','WAITING','INVITED')",
                 activityId);
-        jdbc.update("UPDATE activity SET status='CANCELLED', updated_at=? WHERE id=?",
+        jdbc.update("UPDATE activity SET status='CANCELLED', updated_at=?, version=version+1 WHERE id=?",
                 ts(now), activityId);
         jdbc.update("UPDATE invitation SET status='INVALID', responded_at=? WHERE participation_id IN " +
                 "(SELECT id FROM participation WHERE activity_id=?) AND status='PENDING'", ts(now), activityId);
@@ -453,50 +454,92 @@ public class BuddyService {
         return Map.of("ok", true);
     }
 
-    /** 任务 2（2026-11-09，P0）：组织者报名截止前改活动时间（开始 / 结束 / 截止）。
-     *  SRS 表 3.3-1 R5：活动信息、容量、时间仅在报名截止前可改；修改后仍须满足
-     *  “发出时间早于过期时间，且过期时间不晚于报名截止”，否则拒绝修改。
-     *  本次只做时间，不扩容量与活动信息；不产生新活动、不迁移报名（原 id 与原
-     *  报名记录不变）。改后给全部正式成员与候补成员（含待确认邀请者、含组织者
-     *  本人作为参与者时）发「变更」通知，内容写清旧时间 → 新时间。
-     *  R5 细则（SRS §3.3.3.3）：新报名截止早于已有待确认邀请的过期时间时
-     *  拒绝修改并提示；延后截止不延长已有邀请的过期时间（本方法不动 invitation）。 */
-    @Transactional
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public Map<String, Object> updateActivity(long activityId, long organizerId, long version,
+                                               ActivityFields fields, String reason) {
+        var act = lockActivity(activityId);
+        requireOrganizer(act, organizerId);
+        if (version != ((Number) act.get("version")).longValue()) {
+            return Map.of("ok", false, "code", "ACTIVITY_VERSION_CONFLICT",
+                    "error", "活动已更新，请重新读取详情后修改", "version", act.get("version"));
+        }
+        return saveActivityUpdate(activityId, act, fields, reason);
+    }
+
+    @Transactional(isolation = Isolation.READ_COMMITTED)
     public Map<String, Object> reschedule(long activityId, long organizerId,
                                           LocalDateTime deadline, LocalDateTime start, LocalDateTime end) {
         var act = lockActivity(activityId);
+        requireOrganizer(act, organizerId);
+        var fields = new ActivityFields((String) act.get("title"), (String) act.get("category"),
+                (String) act.get("description"), (String) act.get("conditions"), (String) act.get("location"),
+                ((Number) act.get("capacity")).intValue(), deadline, start, end);
+        return saveActivityUpdate(activityId, act, fields, "");
+    }
+
+    private void requireOrganizer(Map<String, Object> act, long organizerId) {
+        if (((Number) act.get("organizer_id")).longValue() != organizerId)
+            throw new IllegalStateException("只有组织者可以修改活动");
+    }
+
+    private Map<String, Object> saveActivityUpdate(long activityId, Map<String, Object> act,
+                                                    ActivityFields fields, String reason) {
         LocalDateTime now = LocalDateTime.now();
-        if (!Objects.equals(((Number) act.get("organizer_id")).longValue(), organizerId))
-            throw new IllegalStateException("只有组织者可以修改活动时间");
-        if (!"OPEN".equals(act.get("status")))
-            throw new IllegalStateException("活动不在报名期，不可改时间");
-        if (!now.isBefore(asLocalDateTime(act.get("deadline"))))
-            throw new IllegalStateException("报名已截止，不可改时间");
-        if (!(now.isBefore(deadline) && !deadline.isAfter(start) && start.isBefore(end)))
-            throw new IllegalStateException("时间需满足：现在 < 报名截止 ≤ 开始 < 结束");
-        var pending = jdbc.queryForList(
-                "SELECT i.expires_at FROM invitation i JOIN participation p ON p.id=i.participation_id " +
-                "WHERE p.activity_id=? AND i.status='PENDING'", activityId);
-        for (var row : pending) {
-            if (deadline.isBefore(asLocalDateTime(row.get("expires_at"))))
-                throw new IllegalStateException("新报名截止早于已有待确认邀请的过期时间，无法修改");
+        if (!"OPEN".equals(act.get("status")) || !now.isBefore(asLocalDateTime(act.get("deadline"))))
+            throw new IllegalStateException("报名已截止或活动不可修改");
+        fields.validateTime(now);
+        if (fields.capacity() < formalCount(activityId) + reservedCount(activityId, now))
+            throw new IllegalStateException("人数上限不能小于正式成员与有效预留名额之和");
+
+        int incompatibleInvites = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM invitation i JOIN participation p ON p.id=i.participation_id " +
+                "WHERE p.activity_id=? AND i.status='PENDING' AND i.expires_at > ?",
+                Integer.class, activityId, ts(fields.deadline()));
+        if (incompatibleInvites > 0)
+            throw new IllegalStateException("新报名截止早于已有待确认邀请的过期时间，无法修改");
+
+        Map<String, Object> values = Map.of(
+                "title", fields.title(), "category", fields.category(), "description", fields.description(),
+                "conditions", fields.conditions(), "location", fields.location(), "capacity", fields.capacity(),
+                "deadline", fields.deadline(), "start_time", fields.start(), "end_time", fields.end());
+        Map<String, Object> changes = new LinkedHashMap<>();
+        for (var field : values.entrySet()) {
+            Object before = act.get(field.getKey());
+            if (field.getValue() instanceof LocalDateTime) before = asLocalDateTime(before);
+            if (!Objects.equals(before, field.getValue())) {
+                changes.put(field.getKey(), Map.of("before", before, "after", field.getValue()));
+            }
         }
-        String oldRange = fmtFullRange(asLocalDateTime(act.get("start_time")), asLocalDateTime(act.get("end_time")));
-        var recipients = jdbc.queryForList(
-                "SELECT user_id FROM participation WHERE activity_id=? AND status IN ('FORMAL','WAITING','INVITED')",
-                activityId);
-        jdbc.update("UPDATE activity SET deadline=?, start_time=?, end_time=?, updated_at=? WHERE id=?",
-                ts(deadline), ts(start), ts(end), ts(now), activityId);
-        String newRange = fmtFullRange(start, end);
-        String title = (String) act.get("title");
-        for (var p : recipients) {
-            long uid = ((Number) p.get("user_id")).longValue();
-            notify(uid, activityId, null, "变更",
-                    "活动「" + title + "」时间已变更：原定 " + oldRange + "，现为 " + newRange + "，地点 " + act.get("location") + "。",
-                    "notify:reschedule:" + activityId + ":" + uid + ":" + now);
+
+        long version = ((Number) act.get("version")).longValue();
+        int affected = 0;
+        if (!changes.isEmpty()) {
+            expireDueInvitations(activityId, now, (String) act.get("title"));
+            var recipients = jdbc.queryForList(
+                    "SELECT user_id FROM participation WHERE activity_id=? AND status IN ('FORMAL','WAITING','INVITED')",
+                    Long.class, activityId);
+            jdbc.update("UPDATE activity SET title=?, category=?, description=?, conditions=?, location=?, " +
+                            "capacity=?, deadline=?, start_time=?, end_time=?, updated_at=?, version=version+1 WHERE id=?",
+                    fields.title(), fields.category(), fields.description(), fields.conditions(), fields.location(),
+                    fields.capacity(), ts(fields.deadline()), ts(fields.start()), ts(fields.end()), ts(now), activityId);
+            version++;
+            affected = recipients.size();
+            String oldRange = fmtFullRange(asLocalDateTime(act.get("start_time")), asLocalDateTime(act.get("end_time")));
+            String newRange = fmtFullRange(fields.start(), fields.end());
+            String timeChange = oldRange.equals(newRange) ? newRange : oldRange + " → " + newRange;
+            String content = "活动「" + fields.title() + "」资料已更新。活动时间 " + timeChange +
+                    "，地点 " + fields.location() + "，人数上限 " + fields.capacity() + "。" +
+                    (reason.isEmpty() ? "" : "原因：" + reason);
+            for (long userId : recipients) {
+                notify(userId, activityId, null, "变更", content,
+                        "notify:edit:" + activityId + ":" + userId + ":" + version);
+            }
+            act.putAll(values);
+            promote(activityId, act, now);
         }
-        return Map.of("ok", true, "activity_id", activityId,
-                "deadline", deadline.toString(), "start_time", start.toString(), "end_time", end.toString());
+        return Map.of("ok", true, "activity_id", activityId, "version", version, "changes", changes,
+                "affected", affected, "deadline", fields.deadline().toString(),
+                "start_time", fields.start().toString(), "end_time", fields.end().toString());
     }
 
     /** 任务 9（2026-11-09，P1）：站内留言——详情页「给组织者留言」。

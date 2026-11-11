@@ -1,5 +1,6 @@
 package com.campusbuddy.controller;
 
+import com.campusbuddy.model.ActivityFields;
 import com.campusbuddy.service.AuthService;
 import com.campusbuddy.service.BuddyService;
 import org.springframework.beans.factory.annotation.Value;
@@ -201,50 +202,8 @@ public class ApiController {
     public Map<String, Object> create(@RequestBody Map<String, Object> body,
             @RequestHeader(value = "Authorization", required = false) String h) {
         long me = require(h);
-        // 旧代码对空标题、缺地点、非法类别、缺容量一律不校验，
-        // 走到数据库约束或空指针时直接返回 500；且用 SELECT MAX(id) 取新活动 id，
-        // 并发创建时多个请求会拿到同一个（别人的）id。全部在此处校验 + 用
-        // 可移植的 RETURN_GENERATED_KEYS 取新活动 id（PostgreSQL 与 MySQL 驱动都支持）。
-        String title = body.get("title") instanceof String ? (String) body.get("title") : null;
-        if (title == null || title.isBlank() || title.codePointCount(0, title.length()) > 50)
-            throw new IllegalStateException("标题需为 1-50 字");
-        String location = body.get("location") instanceof String ? (String) body.get("location") : null;
-        if (location == null || location.isBlank() || location.codePointCount(0, location.length()) > 100)
-            throw new IllegalStateException("地点需为 1-100 字");
-        Integer capacity = null;
-        Object capRaw = body.get("capacity");
-        if (capRaw instanceof Number) capacity = ((Number) capRaw).intValue();
-        else if (capRaw instanceof String) {
-            try { capacity = Integer.parseInt(((String) capRaw).trim()); } catch (NumberFormatException ignored) { }
-        }
-        if (capacity == null || capacity < 1 || capacity > 100)
-            throw new IllegalStateException("人数上限需为 1-100");
-        String category = body.get("category") instanceof String ? (String) body.get("category") : "其他";
-        if (!Set.of("羽毛球", "桌游", "学习组", "其他").contains(category))
-            throw new IllegalStateException("类别不合法");
-        String description = body.get("description") instanceof String ? (String) body.get("description") : "";
-        String conditions = body.get("conditions") instanceof String ? (String) body.get("conditions") : "";
-        if (description.codePointCount(0, description.length()) > 2000)
-            throw new IllegalStateException("介绍不能超过 2000 字");
-        if (conditions.codePointCount(0, conditions.length()) > 500)
-            throw new IllegalStateException("参与条件不能超过 500 字");
-        LocalDateTime deadline, start, end;
-        try {
-            // 前端 datetime-local 发来东八区墙钟，库里直接存东八区墙钟，
-            // 不做任何时区转换（2026-11-06 时区统一改造，旧 shanghaiToUtcWall 已删除）。
-            deadline = LocalDateTime.parse((String) body.get("deadline"));
-            start = LocalDateTime.parse((String) body.get("start_time"));
-            end = LocalDateTime.parse((String) body.get("end_time"));
-        } catch (Exception e) {
-            throw new IllegalStateException("时间格式不正确");
-        }
-        if (!(LocalDateTime.now().isBefore(deadline) && !deadline.isAfter(start) && start.isBefore(end)))
-            throw new IllegalStateException("时间需满足：现在 < 报名截止 ≤ 开始 < 结束");
-        // lambda 内只能捕获 final / effectively-final 变量，先复制一份。
-        // 取新活动 id 必须用列名数组 new String[]{"id"} 而不是 Statement.RETURN_GENERATED_KEYS：
-        // PostgreSQL 驱动后者会把整行都当作生成键返回，getKey() 会因多键报错。
-        final int capFinal = capacity;
-        final LocalDateTime deadlineFinal = deadline, startFinal = start, endFinal = end;
+        ActivityFields fields = ActivityFields.from(body);
+        fields.validateTime(LocalDateTime.now());
         KeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update(con -> {
             PreparedStatement ps = con.prepareStatement(
@@ -252,15 +211,15 @@ public class ApiController {
                     "VALUES (?,?,?,?,?,?,?,?,?,?)",
                     new String[]{"id"});
             ps.setLong(1, me);
-            ps.setString(2, title);
-            ps.setString(3, category);
-            ps.setString(4, description);
-            ps.setString(5, conditions);
-            ps.setString(6, location);
-            ps.setInt(7, capFinal);
-            ps.setTimestamp(8, Timestamp.valueOf(deadlineFinal));
-            ps.setTimestamp(9, Timestamp.valueOf(startFinal));
-            ps.setTimestamp(10, Timestamp.valueOf(endFinal));
+            ps.setString(2, fields.title());
+            ps.setString(3, fields.category());
+            ps.setString(4, fields.description());
+            ps.setString(5, fields.conditions());
+            ps.setString(6, fields.location());
+            ps.setInt(7, fields.capacity());
+            ps.setTimestamp(8, Timestamp.valueOf(fields.deadline()));
+            ps.setTimestamp(9, Timestamp.valueOf(fields.start()));
+            ps.setTimestamp(10, Timestamp.valueOf(fields.end()));
             return ps;
         }, keyHolder);
         Long id = keyHolder.getKey().longValue();
@@ -275,23 +234,30 @@ public class ApiController {
         return buddy.cancelActivity(id, require(h));
     }
 
-    // 任务 2（2026-11-09）：组织者报名截止前改活动时间（开始 / 结束 / 截止三项）。
-    // 只改时间，不扩容量与活动信息；R5 校验（截止前、时间顺序、待确认邀请保护）
-    // 与变更通知都在 BuddyService.reschedule 内。前端入口由苏晴在详情页组织者视角加。
+    @PutMapping("/activities/{id}")
+    public ResponseEntity<Map<String, Object>> updateActivity(@PathVariable long id,
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = "Authorization", required = false) String h) {
+        long me = require(h);
+        long version;
+        try {
+            version = Long.parseLong(String.valueOf(body.get("version")));
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("缺少有效活动版本，请刷新详情");
+        }
+        var result = buddy.updateActivity(id, me, version, ActivityFields.from(body), ActivityFields.reason(body));
+        return Boolean.FALSE.equals(result.get("ok"))
+                ? ResponseEntity.status(HttpStatus.CONFLICT).body(result)
+                : ResponseEntity.ok(result);
+    }
+
     @PostMapping("/activities/{id}/reschedule")
     public Map<String, Object> reschedule(@PathVariable long id,
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = "Authorization", required = false) String h) {
         long me = require(h);
-        LocalDateTime deadline, start, end;
-        try {
-            deadline = LocalDateTime.parse((String) body.get("deadline"));
-            start = LocalDateTime.parse((String) body.get("start_time"));
-            end = LocalDateTime.parse((String) body.get("end_time"));
-        } catch (Exception e) {
-            throw new IllegalStateException("时间格式不正确");
-        }
-        return buddy.reschedule(id, me, deadline, start, end);
+        return buddy.reschedule(id, me, ActivityFields.time(body, "deadline"),
+                ActivityFields.time(body, "start_time"), ActivityFields.time(body, "end_time"));
     }
 
     // 任务 9（2026-11-09）：站内留言——详情页「给组织者留言」，登录用户报名前后均可。

@@ -168,19 +168,28 @@
             <p v-if="!detail.messages.length" class="meta">暂无留言。</p>
           </div>
           <template v-if="detail.status !== 'CANCELLED'">
-            <button class="warn" @click="cancelActivity(detail.id)">取消活动</button>
-            <button v-if="detail.status === 'OPEN' && !deadlinePassed(detail)" class="ghost" @click="openReschedule(detail)">修改时间</button>
-            <button v-if="detail.status === 'OPEN' && deadlinePassed(detail)" class="ghost" disabled>修改时间（报名已截止，不可改时间）</button>
+            <button v-if="parseShanghai(detail.start_time) > nowTick" class="warn" @click="cancelActivity(detail.id)">取消活动</button>
+            <button v-if="detail.status === 'OPEN' && !deadlinePassed(detail)" class="ghost" @click="openReschedule(detail)">修改活动</button>
+            <button v-if="detail.status === 'OPEN' && deadlinePassed(detail)" class="ghost" disabled>报名已截止，无法修改</button>
           </template>
           <div v-if="rescheduleOpen" class="reschedule-box">
-            <h4>修改时间（仅报名截止前）</h4>
+            <h4>修改活动</h4>
+            <label>名称 <input v-model="rescheduleForm.title" maxlength="50" /></label>
+            <label>类别
+              <select v-model="rescheduleForm.category"><option>羽毛球</option><option>桌游</option><option>学习组</option><option>其他</option></select>
+            </label>
+            <label>地点 <input v-model="rescheduleForm.location" maxlength="100" /></label>
+            <label>人数上限 <input v-model.number="rescheduleForm.capacity" type="number" min="1" max="100" /></label>
+            <label>介绍 <textarea v-model="rescheduleForm.description" maxlength="2000"></textarea></label>
+            <label>参与条件 <textarea v-model="rescheduleForm.conditions" maxlength="500"></textarea></label>
             <label class="field-label">报名截止</label>
             <div class="dt-row"><input v-model="rescheduleForm.deadline" placeholder="如：2026-11-09 21:00" @blur="normalizeDT('reschedule','deadline')" /><button class="ghost" type="button" @click="openPicker('reschedule','deadline')">📅 选择</button></div>
             <label class="field-label">开始时间</label>
             <div class="dt-row"><input v-model="rescheduleForm.start_time" placeholder="如：2026-11-10 10:00" @blur="normalizeDT('reschedule','start_time')" /><button class="ghost" type="button" @click="openPicker('reschedule','start_time')">📅 选择</button></div>
             <label class="field-label">结束时间</label>
             <div class="dt-row"><input v-model="rescheduleForm.end_time" placeholder="如：2026-11-10 12:00" @blur="normalizeDT('reschedule','end_time')" /><button class="ghost" type="button" @click="openPicker('reschedule','end_time')">📅 选择</button></div>
-            <p class="hint">时间格式：年-月-日 时:分（24 小时制），如 2026-11-09 21:00；只改时间，不改名额与报名记录。</p>
+            <label>修改原因 <textarea v-model="rescheduleForm.reason" minlength="10" maxlength="500"></textarea></label>
+            <p class="hint">填写 10–500 字的原因。更新后会通知正式成员和候补成员。</p>
             <button class="primary" :disabled="rescheduleBusy" @click="submitReschedule(detail.activity_id || detail.id)">{{ rescheduleBusy ? '提交中…' : '确认修改' }}</button>
             <button class="ghost" @click="rescheduleOpen = false">取消</button>
           </div>
@@ -379,7 +388,8 @@ const replyDrafts = ref({})
 // 任务 10：改密码表单。
 const pwForm = ref({ oldPw: '', newPw: '' })
 const pwBusy = ref(false)
-// 任务 2：改时间表单（组织者视角，仅报名截止前）。
+// 组织者在报名截止前可编辑活动资料。
+const rescheduleSource = ref(null)
 const rescheduleOpen = ref(false)
 const rescheduleForm = ref({ deadline: '', start_time: '', end_time: '' })
 const rescheduleBusy = ref(false)
@@ -400,7 +410,11 @@ function saveApiBase() { localStorage.setItem('apiBase', apiBase.value.trim()) }
 async function api(path, method = 'GET', body) {
   const r = await fetch((apiBase.value.trim().replace(/\/$/, '') || '') + path, { method, headers: headers(), body: body ? JSON.stringify(body) : undefined })
   const j = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(j.error || ('请求失败 ' + r.status))
+  if (!r.ok) {
+    const error = new Error(j.error || ('请求失败 ' + r.status))
+    error.code = j.code
+    throw error
+  }
   return j
 }
 function statusText(s) {
@@ -896,7 +910,10 @@ async function openDetail(id) {
   try {
     // 记录从哪来（大厅 / 我的活动），详情页返回时回到原地。
     if (view.value !== 'detail') detailFrom.value = view.value === 'my' ? 'my' : 'hall'
-    detail.value = await api('/api/activities/' + id); msg.value = ''
+    const nextDetail = await api('/api/activities/' + id)
+    if (rescheduleSource.value?.id !== nextDetail.id) rescheduleOpen.value = false
+    detail.value = nextDetail
+    msg.value = ''
     // 任务 17（2026-11-10）：非组织者视角拉取本人发过的留言及组织者回复；
     // 组织者走名单视图的全部留言，不拉此接口。
     if (user.value && !detail.value.roster) loadMyMessages(id); else myMessages.value = []
@@ -1014,12 +1031,20 @@ async function publish() {
     view.value = 'hall'; loadHall()
   } catch (e) { msg.value = friendlyErr(e) } finally { publishBusy.value = false }
 }
-// 任务 2：改时间入口（组织者视角，仅报名截止前）。预填当前时间（显示格式）。
 function openReschedule(d) {
+  rescheduleSource.value = d
   rescheduleForm.value = {
+    version: d.version,
+    title: d.title,
+    category: d.category,
+    location: d.location,
+    capacity: d.capacity,
+    description: d.description || '',
+    conditions: d.conditions || '',
     deadline: parseDTInput(d.deadline) || '',
     start_time: parseDTInput(d.start_time) || '',
     end_time: parseDTInput(d.end_time) || '',
+    reason: '',
   }
   rescheduleOpen.value = true
 }
@@ -1027,23 +1052,30 @@ async function submitReschedule(id) {
   if (rescheduleBusy.value) return
   rescheduleBusy.value = true
   try {
-    // 任务 1（2026-11-10）：逐字段校验，报错指明是哪个字段。
-    const rescheduleLabels = { deadline: '报名截止', start_time: '开始时间', end_time: '结束时间' }
-    for (const k of ['deadline', 'start_time', 'end_time']) {
-      if (!toApiDT(rescheduleForm.value[k])) { msg.value = `${rescheduleLabels[k]}为空或格式不对，请用「2026-11-09 21:00」这样的格式填写`; return }
+    const fields = { ...rescheduleForm.value }
+    const labels = { deadline: '报名截止', start_time: '开始时间', end_time: '结束时间' }
+    for (const [key, label] of Object.entries(labels)) {
+      const formatted = toApiDT(fields[key])
+      if (!formatted) { msg.value = label + '格式不正确'; return }
+      const original = rescheduleSource.value[key]
+      // 未修改分钟时，保留原值的秒数。
+      const seconds = formatted === toApiDT(original) ? String(original).slice(17, 19) : '00'
+      fields[key] = formatted + ':' + (seconds || '00')
     }
-    const deadline = toApiDT(rescheduleForm.value.deadline)
-    const start = toApiDT(rescheduleForm.value.start_time)
-    const end = toApiDT(rescheduleForm.value.end_time)
-    // 后端 reschedule 接口要带秒的 T 格式（见 changes.md 接口约定）。
-    await api('/api/activities/' + id + '/reschedule', 'POST', { deadline: deadline + ':00', start_time: start + ':00', end_time: end + ':00' })
+    const result = await api('/api/activities/' + id, 'PUT', fields)
     rescheduleOpen.value = false
     await openDetail(id)
-    msg.value = '时间已修改，参与者已收到变更通知'
-    const snapMsg = msg.value
-    setTimeout(() => { if (msg.value === snapMsg) msg.value = '' }, 5000)
+    msg.value = Object.keys(result.changes).length ? '活动已修改，已通知 ' + result.affected + ' 人' : '活动资料没有变化'
     loadHall()
-  } catch (e) { msg.value = friendlyErr(e) } finally { rescheduleBusy.value = false }
+  } catch (e) {
+    if (e.code === 'ACTIVITY_VERSION_CONFLICT') {
+      rescheduleOpen.value = false
+      await openDetail(id)
+    }
+    msg.value = friendlyErr(e)
+  } finally {
+    rescheduleBusy.value = false
+  }
 }
 // 任务 9：站内留言——详情页给组织者留言（报名前后均可，仅组织者可见）。
 async function sendMessage(id) {
