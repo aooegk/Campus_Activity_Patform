@@ -190,26 +190,40 @@ public class ApiController {
     public Map<String, Object> activityDetail(@PathVariable long id,
             @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
         Long me = actor;
+        LocalDateTime now = LocalDateTime.now();
+        Timestamp timestamp = Timestamp.valueOf(now);
         var act = jdbc.queryForMap("SELECT a.*, u.nickname AS organizer_name FROM activity a " +
                 "JOIN app_user u ON u.id=a.organizer_id WHERE a.id=?", id);
+        boolean organizer = me != null && Objects.equals(((Number) act.get("organizer_id")).longValue(), me);
+        boolean archived = "CANCELLED".equals(act.get("status")) || "ENDED".equals(act.get("status"))
+                || !now.isBefore(activityTime(act.get("end_time")));
+        boolean open = !archived && "OPEN".equals(act.get("status")) && now.isBefore(activityTime(act.get("deadline")));
         Map<String, Object> out = new LinkedHashMap<>(act);
-        // 任务 3（2026-11-10）：未登录也返回人数（公开计数）；登录照旧返回完整详情。
-        if (me != null) out.putAll(buddy.detail(id, me));
-        else out.putAll(buddy.publicCounts(id));
-        // 组织者可见名单与候补队列；其他人只能看到人数
-        if (me != null && Objects.equals(((Number) act.get("organizer_id")).longValue(), me)) {
+        if (me != null) out.putAll(buddy.detail(id, me, now));
+        else out.putAll(buddy.publicCounts(id, now, open));
+        if (archived && !organizer && !out.containsKey("participation_id"))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "活动不存在或仅向历史参与者开放");
+
+        if (organizer) {
             out.put("roster", jdbc.queryForList(
                     "SELECT p.*, u.nickname FROM participation p JOIN app_user u ON u.id=p.user_id " +
-                    "WHERE p.activity_id=? AND p.status IN ('FORMAL','WAITING','INVITED') " +
-                    "ORDER BY CASE p.status WHEN 'FORMAL' THEN 0 WHEN 'INVITED' THEN 1 ELSE 2 END, p.queued_at, p.id", id));
-            out.put("pending_invitations", jdbc.queryForList(
+                    "WHERE p.activity_id=? AND (p.status='FORMAL' OR (? AND (p.status='WAITING' OR " +
+                    "(p.status='INVITED' AND EXISTS (SELECT 1 FROM invitation i WHERE i.participation_id=p.id " +
+                    "AND i.status='PENDING' AND i.expires_at > ?))))) " +
+                    "ORDER BY CASE p.status WHEN 'FORMAL' THEN 0 WHEN 'INVITED' THEN 1 ELSE 2 END, p.queued_at, p.id",
+                    id, open, timestamp));
+            out.put("pending_invitations", open ? jdbc.queryForList(
                     "SELECT i.*, u.nickname FROM invitation i JOIN participation p ON p.id=i.participation_id " +
-                    "JOIN app_user u ON u.id=p.user_id WHERE p.activity_id=? AND i.status='PENDING' AND i.expires_at > ? ORDER BY i.expires_at",
-                    id, Timestamp.valueOf(LocalDateTime.now())));
+                    "JOIN app_user u ON u.id=p.user_id WHERE p.activity_id=? AND i.status='PENDING' " +
+                    "AND i.expires_at > ? ORDER BY i.expires_at, i.id", id, timestamp) : List.of());
             // 任务 9（2026-11-09）：站内留言只在组织者视角返回，不上公开详情页。
             out.put("messages", buddy.listMessages(id));
         }
         return out;
+    }
+
+    private LocalDateTime activityTime(Object value) {
+        return value instanceof Timestamp timestamp ? timestamp.toLocalDateTime() : (LocalDateTime) value;
     }
 
     @PostMapping("/activities")
@@ -364,12 +378,42 @@ public class ApiController {
     public List<Map<String, Object>> my(@RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
         long me = require(actor);
         Timestamp now = Timestamp.valueOf(LocalDateTime.now());
-        return jdbc.queryForList(
-                "SELECT p.*, a.title, a.location, a.capacity, a.start_time, a.deadline, " +
-                "(SELECT i.id FROM invitation i WHERE i.participation_id=p.id AND i.status='PENDING' AND i.expires_at > ? ORDER BY i.id DESC LIMIT 1) AS invitation_id, " +
-                "(SELECT i.expires_at FROM invitation i WHERE i.participation_id=p.id AND i.status='PENDING' AND i.expires_at > ? ORDER BY i.id DESC LIMIT 1) AS invitation_expires_at " +
-                "FROM participation p JOIN activity a ON a.id=p.activity_id WHERE p.user_id=? " +
-                "ORDER BY p.updated_at DESC", now, now, me);
+        return jdbc.queryForList("""
+                SELECT p.*, a.title, a.location, a.capacity, a.start_time, a.end_time, a.deadline,
+                       a.status AS activity_status, i.id AS invitation_id, i.expires_at AS invitation_expires_at,
+                       CASE
+                           WHEN a.status IN ('CANCELLED','ENDED') OR a.end_time <= ? THEN 'history'
+                           WHEN p.status='FORMAL' THEN 'signed'
+                           WHEN a.deadline <= ? THEN 'history'
+                           WHEN p.status='WAITING' OR (p.status='INVITED' AND i.id IS NOT NULL) THEN 'waiting'
+                           ELSE 'history'
+                       END AS my_view,
+                       CASE WHEN p.status='WAITING' AND a.status='OPEN' AND a.deadline > ? THEN
+                           (SELECT COUNT(*) + 1 FROM participation w
+                            WHERE w.activity_id=p.activity_id AND w.status='WAITING'
+                              AND (w.queued_at < p.queued_at OR (w.queued_at=p.queued_at AND w.id < p.id)))
+                       END AS my_rank
+                FROM participation p
+                JOIN activity a ON a.id=p.activity_id
+                LEFT JOIN invitation i ON i.id=(
+                    SELECT j.id FROM invitation j WHERE j.participation_id=p.id
+                      AND j.status='PENDING' AND j.expires_at > ? AND a.deadline > ? AND a.status='OPEN'
+                    ORDER BY j.id DESC LIMIT 1
+                )
+                WHERE p.user_id=?
+                ORDER BY p.updated_at DESC, p.id DESC
+                """, now, now, now, now, now, me);
+    }
+
+    @GetMapping("/my/participations/{id}/history")
+    public List<Map<String, Object>> participationHistory(@PathVariable long id,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        long me = require(actor);
+        int owned = jdbc.queryForObject("SELECT COUNT(*) FROM participation WHERE id=? AND user_id=?",
+                Integer.class, id, me);
+        if (owned == 0) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "参与记录不存在");
+        return jdbc.queryForList("SELECT id, from_status, to_status, change_kind, occurred_at FROM participation_event " +
+                "WHERE participation_id=? ORDER BY occurred_at DESC, id DESC LIMIT 100", id);
     }
 
     // 任务 2：我组织的活动（带正式/候补/预留人数）。新接口，不改 /api/my 的返回形状
@@ -387,18 +431,33 @@ public class ApiController {
                 Timestamp.valueOf(LocalDateTime.now()), me);
     }
 
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     @GetMapping("/notifications")
-    public Map<String, Object> notifications(@RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+    public Map<String, Object> notifications(@RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor,
+            @RequestParam(defaultValue = "1") int page, @RequestParam(defaultValue = "50") int size) {
         long me = require(actor);
-        // 任务 4 配合（2026-11-10）：邀请通知附加 expires_at（LEFT JOIN invitation），
-        // 前端倒计时优先用该字段，解析通知文案为兜底；非邀请类通知该字段为 null。
-        // invitation 表无 created_at 列，ORDER BY created_at 无歧义。
+        if (page < 1 || size < 1 || size > 50) throw new IllegalStateException("页码从 1 开始，每页 1–50 条");
+        long offset = ((long) page - 1) * size;
         return Map.of("list", jdbc.queryForList(
-                        "SELECT n.*, i.expires_at AS expires_at FROM notification n " +
+                        "SELECT n.*, i.expires_at AS expires_at, i.status AS invitation_status FROM notification n " +
                         "LEFT JOIN invitation i ON i.id=n.invitation_id " +
-                        "WHERE n.user_id=? ORDER BY n.created_at DESC LIMIT 50", me),
+                        "WHERE n.user_id=? ORDER BY n.created_at DESC, n.id DESC LIMIT ? OFFSET ?", me, size, offset),
                 "unread", jdbc.queryForObject(
-                        "SELECT COUNT(*) FROM notification WHERE user_id=? AND read_at IS NULL", Integer.class, me));
+                        "SELECT COUNT(*) FROM notification WHERE user_id=? AND read_at IS NULL", Integer.class, me),
+                "total", jdbc.queryForObject("SELECT COUNT(*) FROM notification WHERE user_id=?", Long.class, me),
+                "page", page, "size", size);
+    }
+
+    @PostMapping("/notifications/{id}/read")
+    public Map<String, Object> readNotification(@PathVariable long id,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        long me = require(actor);
+        int found = jdbc.queryForObject("SELECT COUNT(*) FROM notification WHERE id=? AND user_id=?",
+                Integer.class, id, me);
+        if (found == 0) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "通知不存在");
+        jdbc.update("UPDATE notification SET read_at=? WHERE id=? AND user_id=? AND read_at IS NULL",
+                Timestamp.valueOf(LocalDateTime.now()), id, me);
+        return Map.of("ok", true);
     }
 
     @PostMapping("/notifications/read-all")
@@ -422,6 +481,7 @@ public class ApiController {
         jdbc.update("DELETE FROM feedback");
         jdbc.update("DELETE FROM notification");
         jdbc.update("DELETE FROM invitation");
+        jdbc.update("DELETE FROM participation_event");
         jdbc.update("DELETE FROM participation");
         jdbc.update("DELETE FROM activity");
         jdbc.update("DELETE FROM app_user");

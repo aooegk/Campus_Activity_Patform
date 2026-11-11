@@ -46,9 +46,9 @@ public class SweepService {
                 "SELECT a.id FROM activity a WHERE EXISTS (" +
                 "SELECT 1 FROM invitation i JOIN participation p ON p.id=i.participation_id " +
                 "WHERE p.activity_id=a.id AND i.status='PENDING' AND i.expires_at <= ?) " +
-                "OR (? AND a.status='OPEN' AND a.deadline > ? AND EXISTS (" +
+                "OR (a.status <> 'CANCELLED' AND (a.deadline <= ? OR (? AND a.status='OPEN')) AND EXISTS (" +
                 "SELECT 1 FROM participation p WHERE p.activity_id=a.id AND p.status='WAITING')) ORDER BY a.id",
-                Long.class, cutoff, daytime, cutoff);
+                Long.class, cutoff, cutoff, daytime);
         for (Long id : activities) {
             try {
                 buddy.refreshInvitations(id);

@@ -216,7 +216,7 @@ public class BuddyService {
             }
             LocalDateTime expires = now.plusSeconds(inviteTtlSeconds);
             if (expires.isAfter(deadline)) expires = deadline;
-            jdbc.update("UPDATE participation SET status='INVITED', updated_at=? WHERE id=?", ts(now), partId);
+            transition(partId, "WAITING", "INVITED", "INVITATION_ISSUED", now);
             String eventKey = "invite:" + partId + ":" + now;
             jdbc.update("INSERT INTO invitation(participation_id, status, issued_at, expires_at, event_key) " +
                             "VALUES (?,'PENDING',?,?,?)", partId, ts(now), ts(expires), eventKey);
@@ -264,6 +264,10 @@ public class BuddyService {
                     status, status.equals("WAITING") ? ts(now.truncatedTo(ChronoUnit.SECONDS)) : null,
                     status.equals("FORMAL") ? ts(now) : null, ts(now), activityId, userId);
         }
+        long participationId = jdbc.queryForObject(
+                "SELECT id FROM participation WHERE activity_id=? AND user_id=?", Long.class, activityId, userId);
+        String from = existing.isEmpty() ? null : (String) existing.get(0).get("status");
+        recordEvent(participationId, from, status, "SIGNUP", now);
         String title = (String) act.get("title");
         long organizerId = ((Number) act.get("organizer_id")).longValue();
         String whenWhere = activityWhenWhere(act);
@@ -305,21 +309,20 @@ public class BuddyService {
                 return detail(activityId, userId);
             }
         }
-        if (st.equals("FORMAL")) {
-            jdbc.update("UPDATE participation SET status='WITHDRAWN', updated_at=? WHERE id=?", ts(now), participationId);
-        } else if (st.equals("WAITING")) {
-            jdbc.update("UPDATE participation SET status='WITHDRAWN', updated_at=? WHERE id=?", ts(now), participationId);
-        } else if (st.equals("INVITED")) {
-            // 待确认者放弃 = 拒绝邀请，释放预留并顺延
+        if ("WAITING".equals(st) && !now.isBefore(asLocalDateTime(act.get("deadline")))) {
+            transition(participationId, "WAITING", "EXPIRED", "REGISTRATION_CLOSED", now);
+            return detail(activityId, userId);
+        }
+        if ("INVITED".equals(st)) {
             jdbc.update("UPDATE notification SET read_at=? WHERE read_at IS NULL AND invitation_id IN " +
                             "(SELECT id FROM invitation WHERE participation_id=? AND status='PENDING')",
                     ts(now), participationId);
             jdbc.update("UPDATE invitation SET status='REJECTED', responded_at=? " +
                             "WHERE participation_id=? AND status='PENDING'", ts(now), participationId);
-            jdbc.update("UPDATE participation SET status='WITHDRAWN', updated_at=? WHERE id=?", ts(now), participationId);
-        } else {
+        } else if (!"FORMAL".equals(st) && !"WAITING".equals(st)) {
             throw new IllegalStateException("当前状态不可退出：" + st);
         }
+        transition(participationId, st, "WITHDRAWN", "WITHDRAWAL", now);
         expireDueInvitations(activityId, now, (String) act.get("title"));
         promote(activityId, act, now);
         String title = (String) act.get("title");
@@ -358,8 +361,7 @@ public class BuddyService {
                     "UPDATE invitation SET status='ACCEPTED', responded_at=? WHERE id=? AND status='PENDING'",
                     ts(now), invitationId);
             if (changed != 1) throw new IllegalStateException("邀请已被另一方处理");
-            jdbc.update("UPDATE participation SET status='FORMAL', joined_at=?, updated_at=? WHERE id=?",
-                    ts(now), ts(now), partId);
+            transition(partId, "INVITED", "FORMAL", "INVITATION_ACCEPTED", now);
             markInvitationRead(invitationId, now);
             notify(userId, activityId, null, "报名",
                     "你已确认参加活动「" + act.get("title") + "」，" + activityWhenWhere(act) + "。",
@@ -371,8 +373,7 @@ public class BuddyService {
         } else {
             jdbc.update("UPDATE invitation SET status='REJECTED', responded_at=? WHERE id=? AND status='PENDING'",
                     ts(now), invitationId);
-            jdbc.update("UPDATE participation SET status='WITHDRAWN', updated_at=? WHERE id=?",
-                    ts(now), partId);
+            transition(partId, "INVITED", "WITHDRAWN", "INVITATION_DECLINED", now);
             markInvitationRead(invitationId, now);
             expireDueInvitations(activityId, now, (String) act.get("title"));
             promote(activityId, act, now);
@@ -401,12 +402,30 @@ public class BuddyService {
             long id = ((Number) invitation.get("id")).longValue();
             long userId = ((Number) invitation.get("user_id")).longValue();
             jdbc.update("UPDATE invitation SET status='EXPIRED', responded_at=? WHERE id=?", ts(now), id);
-            jdbc.update("UPDATE participation SET status='EXPIRED', updated_at=? WHERE id=? AND status='INVITED'",
-                    ts(now), invitation.get("participation_id"));
+            long participationId = ((Number) invitation.get("participation_id")).longValue();
+            transition(participationId, "INVITED", "EXPIRED", "INVITATION_EXPIRED", now);
             markInvitationRead(id, now);
             notify(userId, activityId, null, "邀请", "活动「" + title + "」的递补邀请已过期。",
                     "notify:expired:" + id);
         }
+    }
+
+    private void transition(long id, String from, String to, String kind, LocalDateTime now) {
+        int updated = jdbc.update("UPDATE participation SET status=?, updated_at=?, " +
+                        "joined_at=CASE WHEN ?='FORMAL' THEN ? ELSE joined_at END WHERE id=? AND status=?",
+                to, ts(now), to, ts(now), id, from);
+        if (updated == 1) recordEvent(id, from, to, kind, now);
+    }
+
+    private void recordEvent(long id, String from, String to, String kind, LocalDateTime now) {
+        jdbc.update("INSERT INTO participation_event(participation_id, from_status, to_status, change_kind, occurred_at) " +
+                "VALUES (?,?,?,?,?)", id, from, to, kind, ts(now));
+    }
+
+    private void closeWaiting(long activityId, LocalDateTime now) {
+        var waiting = jdbc.queryForList("SELECT id FROM participation WHERE activity_id=? AND status='WAITING'",
+                Long.class, activityId);
+        for (long id : waiting) transition(id, "WAITING", "EXPIRED", "REGISTRATION_CLOSED", now);
     }
 
     @Transactional(isolation = Isolation.READ_COMMITTED)
@@ -414,7 +433,11 @@ public class BuddyService {
         var act = lockActivity(activityId);
         LocalDateTime now = LocalDateTime.now();
         expireDueInvitations(activityId, now, (String) act.get("title"));
-        promote(activityId, act, now);
+        if (now.isBefore(asLocalDateTime(act.get("deadline")))) {
+            promote(activityId, act, now);
+        } else {
+            closeWaiting(activityId, now);
+        }
     }
 
     /** 任务 1（2026-11-09，P0）：组织者取消活动时给全部受影响成员发取消通知。
@@ -434,19 +457,20 @@ public class BuddyService {
         if (!now.isBefore(asLocalDateTime(act.get("start_time"))))
             throw new IllegalStateException("活动已开始，不能取消");
         expireDueInvitations(activityId, now, (String) act.get("title"));
+        if (!now.isBefore(asLocalDateTime(act.get("deadline")))) closeWaiting(activityId, now);
         var recipients = jdbc.queryForList(
-                "SELECT user_id FROM participation WHERE activity_id=? AND status IN ('FORMAL','WAITING','INVITED')",
+                "SELECT id, user_id, status FROM participation WHERE activity_id=? AND status IN ('FORMAL','WAITING','INVITED')",
                 activityId);
         jdbc.update("UPDATE activity SET status='CANCELLED', updated_at=?, version=version+1 WHERE id=?",
                 ts(now), activityId);
         jdbc.update("UPDATE invitation SET status='INVALID', responded_at=? WHERE participation_id IN " +
                 "(SELECT id FROM participation WHERE activity_id=?) AND status='PENDING'", ts(now), activityId);
-        jdbc.update("UPDATE participation SET status='CANCELLED', updated_at=? " +
-                "WHERE activity_id=? AND status IN ('FORMAL','WAITING','INVITED')", ts(now), activityId);
         String range = fmtFullRange(asLocalDateTime(act.get("start_time")), asLocalDateTime(act.get("end_time")));
         String title = (String) act.get("title");
         for (var p : recipients) {
             long uid = ((Number) p.get("user_id")).longValue();
+            transition(((Number) p.get("id")).longValue(), (String) p.get("status"),
+                    "CANCELLED", "ACTIVITY_CANCELLED", now);
             notify(uid, activityId, null, "取消",
                     "活动「" + title + "」已取消，原定时间 " + range + "，地点 " + act.get("location") + "。",
                     "notify:cancel:" + activityId + ":" + uid);
@@ -649,18 +673,22 @@ public class BuddyService {
 
     /** 任务 3（2026-11-10，P1）：详情人数公开计数——未登录也能看 formal/reserved/waiting
      *  （SRS §3.3.2.2 详情字段清单本就含正式/候补人数）；不含名单、联系方式与本人状态。 */
-    public Map<String, Object> publicCounts(long activityId) {
-        LocalDateTime now = LocalDateTime.now();
+    public Map<String, Object> publicCounts(long activityId, LocalDateTime now, boolean open) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("formal", formalCount(activityId));
-        out.put("reserved", reservedCount(activityId, now));
-        out.put("waiting", waitingCount(activityId));
+        out.put("reserved", open ? reservedCount(activityId, now) : 0);
+        out.put("waiting", open ? waitingCount(activityId) : 0);
+        out.put("server_time", now.toString());
+        out.put("signup_open", open);
         return out;
     }
 
     public Map<String, Object> detail(long activityId, long userId) {
+        return detail(activityId, userId, LocalDateTime.now());
+    }
+
+    public Map<String, Object> detail(long activityId, long userId, LocalDateTime now) {
         var act = jdbc.queryForMap("SELECT * FROM activity WHERE id=?", activityId);
-        LocalDateTime now = LocalDateTime.now();
         var mine = jdbc.queryForList(
                 "SELECT * FROM participation WHERE activity_id=? AND user_id=?", activityId, userId);
         Map<String, Object> out = new LinkedHashMap<>();
@@ -670,9 +698,8 @@ public class BuddyService {
         out.put("description", act.get("description"));
         out.put("conditions", act.get("conditions"));
         out.put("capacity", act.get("capacity"));
-        out.put("formal", formalCount(activityId));
-        out.put("reserved", reservedCount(activityId, now));
-        out.put("waiting", waitingCount(activityId));
+        boolean open = "OPEN".equals(act.get("status")) && now.isBefore(asLocalDateTime(act.get("deadline")));
+        out.putAll(publicCounts(activityId, now, open));
         out.put("status", act.get("status"));
         if (!mine.isEmpty()) {
             var m = mine.get(0);
@@ -682,13 +709,13 @@ public class BuddyService {
             var inv = jdbc.queryForList(
                     "SELECT * FROM invitation WHERE participation_id=? AND status='PENDING' AND expires_at > ? " +
                     "ORDER BY id DESC LIMIT 1", m.get("id"), ts(now));
-            if (!inv.isEmpty()) {
+            if (open && !inv.isEmpty()) {
                 out.put("invitation_id", inv.get(0).get("id"));
                 // 库里存的就是东八区墙钟，直接返回，不再换算。
                 out.put("invitation_expires_at", asLocalDateTime(inv.get(0).get("expires_at")).toString());
             }
             // 候补排名：排队中按 queued_at, id 排序
-            if ("WAITING".equals(m.get("status")) && now.isBefore(asLocalDateTime(act.get("deadline")))) {
+            if ("WAITING".equals(m.get("status")) && open) {
                 var queue = jdbc.queryForList(
                         "SELECT id FROM participation WHERE activity_id=? AND status='WAITING' " +
                         "ORDER BY queued_at, id", activityId);

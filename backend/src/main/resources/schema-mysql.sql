@@ -114,3 +114,14 @@ CREATE TABLE IF NOT EXISTS auth_session (
     INDEX idx_auth_session_user (user_id),
     FOREIGN KEY (user_id) REFERENCES app_user(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS participation_event (
+    id               BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    participation_id BIGINT NOT NULL,
+    from_status      VARCHAR(15),
+    to_status        VARCHAR(15) NOT NULL,
+    change_kind      VARCHAR(30) NOT NULL,
+    occurred_at      DATETIME(6) NOT NULL,
+    INDEX idx_participation_event (participation_id, occurred_at, id),
+    FOREIGN KEY (participation_id) REFERENCES participation(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

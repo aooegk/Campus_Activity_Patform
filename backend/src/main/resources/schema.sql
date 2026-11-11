@@ -111,3 +111,14 @@ CREATE TABLE IF NOT EXISTS auth_session (
     FOREIGN KEY (user_id) REFERENCES app_user(id)
 );
 CREATE INDEX IF NOT EXISTS idx_auth_session_user ON auth_session(user_id);
+
+CREATE TABLE IF NOT EXISTS participation_event (
+    id               BIGSERIAL PRIMARY KEY,
+    participation_id BIGINT NOT NULL,
+    from_status      VARCHAR(15),
+    to_status        VARCHAR(15) NOT NULL,
+    change_kind      VARCHAR(30) NOT NULL,
+    occurred_at      TIMESTAMP NOT NULL,
+    FOREIGN KEY (participation_id) REFERENCES participation(id)
+);
+CREATE INDEX IF NOT EXISTS idx_participation_event ON participation_event(participation_id, occurred_at, id);

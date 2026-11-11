@@ -230,15 +230,25 @@
       <div v-else>
         <div v-for="p in myFiltered" :key="p.id" class="card">
           <h3>{{ p.title }}</h3>
-          <p class="meta card-meta">状态：{{ statusText(p.status) }}　地点：{{ p.location }}　<span class="nowrap">开始：{{ fmtWeek(p.start_time) }}</span>
+          <p class="meta card-meta">状态：{{ myParticipationStatus(p) }}　地点：{{ p.location }}　<span class="nowrap">开始：{{ fmtWeek(p.start_time) }}</span>
+            <span v-if="p.my_rank">　候补第 {{ p.my_rank }} 名</span>
             <span v-if="p.invitation_expires_at">　请在 <span class="nowrap">{{ fmtWeek(p.invitation_expires_at) }}</span> 前确认</span>
             <span v-if="p.status==='INVITED' && inviteSecondsLeft(p.invitation_expires_at) !== undefined">　<span v-if="inviteSecondsLeft(p.invitation_expires_at) !== null">剩余 {{ inviteSecondsLeft(p.invitation_expires_at) }} 秒</span><span v-else>邀请已过期</span></span>
           </p>
-          <p v-if="p.status==='INVITED'" class="hint">拒绝后将退出候补队列，如需再排队请重新报名。</p>
-          <button v-if="canWithdraw(p, p.status)" class="warn" @click="withdraw(p.id, p.activity_id, p.title)">{{ p.status === 'WAITING' ? '放弃候补' : '取消报名' }}</button>
-          <button v-if="['WITHDRAWN','EXPIRED','CANCELLED'].includes(p.status)" class="primary" @click="resignup(p.activity_id)">重新报名</button>
+          <p v-if="p.my_view === 'waiting' && p.status==='INVITED'" class="hint">拒绝后将退出候补队列，如需再排队请重新报名。</p>
+          <button v-if="p.my_view !== 'history' && canWithdraw(p, p.status)" class="warn" @click="withdraw(p.id, p.activity_id, p.title)">{{ p.status === 'WAITING' ? '放弃候补' : '取消报名' }}</button>
+          <button v-if="p.activity_status === 'OPEN' && !deadlinePassed(p) && ['WITHDRAWN','EXPIRED'].includes(p.status)" class="primary" @click="resignup(p.activity_id)">重新报名</button>
           <button v-if="p.invitation_id && p.status==='INVITED' && inviteSecondsLeft(p.invitation_expires_at) !== null" class="primary" @click="accept(p.invitation_id); loadMy()">接受递补</button>
           <button v-if="p.invitation_id && p.status==='INVITED' && inviteSecondsLeft(p.invitation_expires_at) !== null" class="warn" @click="reject(p.invitation_id); loadMy()">拒绝递补</button>
+          <button class="ghost" @click="openDetail(p.activity_id)">查看活动</button>
+          <button class="ghost" @click="toggleParticipationHistory(p.id)">{{ historyId === p.id ? '收起参与过程' : '查看参与过程' }}</button>
+          <div v-if="historyId === p.id">
+            <p v-for="event in historyEvents" :key="event.id" class="meta">
+              {{ fmtWeekSec(event.occurred_at) }}　{{ eventLabel(event.change_kind) }}
+              <span v-if="event.from_status">　{{ statusText(event.from_status) }} →</span> {{ statusText(event.to_status) }}
+            </p>
+            <p v-if="!historyEvents.length" class="meta">暂无已记录的状态变更。</p>
+          </div>
         </div>
         <p v-if="!myFiltered.length" class="meta">{{ myEmptyText }}</p>
       </div>
@@ -284,11 +294,21 @@
         <p v-if="g.count > 1" class="meta">同一活动 30 分钟内还有 {{ g.count - 1 }} 条同类通知，已折叠为最新一条。</p>
         <button v-if="g.count > 1" class="ghost" @click="toggleGroup(g.key)">{{ expandedGroups.has(g.key) ? '收起折叠的通知' : '展开被折叠的 ' + (g.count - 1) + ' 条' }}</button>
         <div v-if="expandedGroups.has(g.key)">
-          <p v-for="(n, i) in g.items" :key="'fold-' + n.id" class="meta"><b>{{ notifTypeText(n.type) }}</b>　第 {{ i + 1 }} 条　{{ n.content }}　<span class="nowrap">{{ fmtWeekSec(n.created_at) }}</span></p>
+          <div v-for="n in g.items.filter(item => item.id !== g.latest.id)" :key="'fold-' + n.id" class="meta">
+            <p>{{ n.content }}　<span class="nowrap">{{ fmtWeekSec(n.created_at) }}</span></p>
+            <button v-if="!n.read_at" class="ghost" @click="readNotification(n)">标为已读</button>
+          </div>
         </div>
+        <button v-if="g.latest.activity_id" class="ghost" @click="openNotification(g.latest)">查看活动</button>
+        <button v-if="!g.latest.read_at" class="ghost" @click="readNotification(g.latest)">标为已读</button>
         <p class="meta"><span class="nowrap">{{ fmtWeek(g.latest.created_at) }}</span>　<span v-if="!g.latest.read_at" class="unread">未读</span><span v-else>已读</span></p>
       </div>
       <p v-if="!groupedNotifs.length" class="meta">暂无通知。</p>
+      <nav v-if="notifTotal > notifPageSize" aria-label="通知分页">
+        <button class="ghost" :disabled="notifPage === 1" @click="loadNotif(notifPage - 1)">上一页</button>
+        <span class="meta">第 {{ notifPage }} 页，共 {{ Math.ceil(notifTotal / notifPageSize) }} 页</span>
+        <button class="ghost" :disabled="notifPage * notifPageSize >= notifTotal" @click="loadNotif(notifPage + 1)">下一页</button>
+      </nav>
     </section>
 
     <section v-if="user && view==='publish'" class="card publish-form">
@@ -360,6 +380,9 @@ const token = ref(localStorage.getItem('token') || '')
 const account = ref(''), password = ref(''), nickname = ref('')
 const msg = ref('')
 const hall = ref([]), detail = ref(null), mine = ref([]), organized = ref([]), notifs = ref([]), unread = ref(0)
+const historyId = ref(null), historyEvents = ref([])
+const notifPage = ref(1), notifTotal = ref(0)
+const notifPageSize = 20
 const q = ref(''), category = ref(''), timeSlot = ref('')
 // 任务 9：深色模式开关（localStorage 'theme' 持久化，默认浅色）。
 const darkMode = ref(localStorage.getItem('theme') === 'dark')
@@ -380,6 +403,7 @@ const quickAccount = ref('demo01')
 const campus = ref('')
 // 任务 8/18：每秒刷新一次的时钟，驱动报名截止倒计时与递补邀请剩余秒数。
 const nowTick = ref(Date.now())
+let serverClockOffset = 0
 // 任务 9：留言草稿（详情页）与回复草稿（按留言 id）。
 const messageDraft = ref('')
 // 任务 17（2026-11-10）：本人发过的留言及组织者回复（GET /api/activities/{id}/messages）。
@@ -411,8 +435,11 @@ function saveApiBase() {
   loadDemoStatus()
 }
 async function loadDemoStatus() {
-  try { demoEnabled.value = (await api('/api/health')).demo_enabled === true }
-  catch { demoEnabled.value = false }
+  try {
+    const health = await api('/api/health')
+    demoEnabled.value = health.demo_enabled === true
+    alignServerClock(health.server_time)
+  } catch { demoEnabled.value = false }
 }
 function csrfCookie() {
   const entry = document.cookie.split(';').map(part => part.trim()).find(part => part.startsWith('campus_csrf='))
@@ -501,6 +528,12 @@ function durationText(a) {
   return r ? `持续约 ${h} 小时 ${r} 分钟` : `持续约 ${h} 小时`
 }
 // 任务 8：报名截止倒计时（只显示，不改变报名判定逻辑；每秒由 nowTick 刷新）。
+function alignServerClock(serverTime) {
+  const parsed = parseShanghai(serverTime)
+  if (!Number.isFinite(parsed)) return
+  serverClockOffset = parsed - Date.now()
+  nowTick.value = parsed
+}
 function deadlineCountdown(a) {
   if (!a || !a.deadline) return ''
   const diff = parseShanghai(a.deadline) - nowTick.value
@@ -516,7 +549,7 @@ function deadlineCountdown(a) {
 // 里的截止时间（后端 fmtFullMinute 固定格式「请在 2026-11-10 周二 上午 09:16 前确认」）；
 // undefined = 非邀请通知或解析不到（不显示倒计时）；'已过期' = 已过截止。
 function inviteCountdownText(n) {
-  if (!n || n.type !== '邀请') return undefined
+  if (!n || n.type !== '邀请' || (n.invitation_status && n.invitation_status !== 'PENDING')) return undefined
   let ts = NaN
   if (n.expires_at) ts = parseShanghai(n.expires_at)
   if (Number.isNaN(ts)) {
@@ -544,7 +577,7 @@ function inviteSecondsLeft(exp) {
 // 2026-11-09 核对：双库快照含 0 行「变更」，B 库现存 3 行「变更」
 // 均为改时间通知（id 27/63/91），无旧退出行残留，兼容映射无保留必要。
 // 「变更」现只用于改时间通知，展示为「时间变更」。
-function notifTypeText(t) { return t === '变更' ? '时间变更' : t }
+function notifTypeText(t) { return t === '变更' ? '活动变更' : t }
 // 任务 9：深色模式切换（只用 REA v4 深色 token，见 style.css body.dark）。
 function applyTheme() {
   document.body.classList.toggle('dark', darkMode.value)
@@ -557,7 +590,7 @@ function exitDemoMode() { demoMode.value = false; localStorage.removeItem('demoM
 // READY 且截止未到会在一个 sweep 周期内自动翻回 OPEN；此处只按状态 + 截止展示）。
 function deadlinePassed(a) {
   if (!a || !a.deadline) return false
-  return parseShanghai(a.deadline) < nowTick.value
+  return parseShanghai(a.deadline) <= nowTick.value
 }
 function canWithdraw(a, status) {
   return a.status !== 'CANCELLED' && ['FORMAL', 'WAITING'].includes(status)
@@ -565,7 +598,7 @@ function canWithdraw(a, status) {
 }
 function canSignup(a) {
   if (!a) return false
-  return a.status === 'OPEN' && !deadlinePassed(a)
+  return a.status === 'OPEN' && a.signup_open !== false && !deadlinePassed(a)
 }
 function signupDisabledReason(a) {
   if (!a) return '报名未开始'
@@ -686,12 +719,29 @@ const filteredHall = computed(() => {
   return list
 })
 // 任务 15：「我的活动」四个视图（SRS §3.3.7 / SDD CEM-06 的文档要求视图）。
-const myFiltered = computed(() => {
-  if (myTab.value === 'signed') return mine.value.filter(p => p.status === 'FORMAL')
-  if (myTab.value === 'waiting') return mine.value.filter(p => ['WAITING', 'INVITED'].includes(p.status))
-  if (myTab.value === 'history') return mine.value.filter(p => ['WITHDRAWN', 'EXPIRED', 'CANCELLED'].includes(p.status))
-  return mine.value
-})
+const myFiltered = computed(() => mine.value.filter(p => p.my_view === myTab.value))
+function myParticipationStatus(p) {
+  if (p.activity_status === 'CANCELLED') return '活动已取消'
+  if (p.status === 'FORMAL' && p.my_view === 'history') return '活动已结束'
+  if (['WAITING', 'INVITED', 'EXPIRED'].includes(p.status) && deadlinePassed(p)) return '报名已截止，未获名额'
+  return p.status === 'INVITED' && !p.invitation_id ? '邀请已过期' : statusText(p.status)
+}
+const participationEventLabels = {
+  SIGNUP: '报名', WITHDRAWAL: '退出', INVITATION_ISSUED: '收到递补邀请',
+  INVITATION_ACCEPTED: '接受递补', INVITATION_DECLINED: '拒绝递补',
+  INVITATION_EXPIRED: '邀请到期', REGISTRATION_CLOSED: '报名截止，未获名额',
+  ACTIVITY_CANCELLED: '活动取消',
+}
+function eventLabel(kind) { return participationEventLabels[kind] || '状态变更' }
+async function toggleParticipationHistory(id) {
+  if (historyId.value === id) { historyId.value = null; return }
+  historyId.value = id
+  historyEvents.value = []
+  try {
+    const events = await api('/api/my/participations/' + id + '/history')
+    if (historyId.value === id) historyEvents.value = events
+  } catch (error) { msg.value = friendlyErr(error) }
+}
 const myEmptyText = computed(() => ({
   signed: '暂无已报名的活动。', waiting: '暂无候补中的活动。', history: '暂无历史记录。'
 }[myTab.value] || '暂无参与记录。'))
@@ -903,7 +953,7 @@ async function resignupFromNotice() {
 // 任务 3（换号串号）：按账号缓存的前端状态集中清理——通知列表、
 // 未读数、我的活动（我报名的 + 我组织的）、详情页（含 my_status /
 // 组织者名单，均属当前账号视角）。登录成功后、退出时、token 失效时都走这里。
-function clearAccountState() { mine.value = []; organized.value = []; notifs.value = []; unread.value = 0; detail.value = null; myMessages.value = []; withdrawNotice.value = null; rosterActivity.value = null; rosterError.value = '' }
+function clearAccountState() { historyId.value = null; historyEvents.value = []; notifPage.value = 1; notifTotal.value = 0; mine.value = []; organized.value = []; notifs.value = []; unread.value = 0; detail.value = null; myMessages.value = []; withdrawNotice.value = null; rosterActivity.value = null; rosterError.value = '' }
 function clearSessionState() {
   token.value = ''
   localStorage.removeItem('token')
@@ -969,6 +1019,7 @@ async function openDetail(id) {
     const nextDetail = await api('/api/activities/' + id)
     if (rescheduleSource.value?.id !== nextDetail.id) rescheduleOpen.value = false
     detail.value = nextDetail
+    alignServerClock(nextDetail.server_time)
     msg.value = ''
     // 任务 17（2026-11-10）：非组织者视角拉取本人发过的留言及组织者回复；
     // 组织者走名单视图的全部留言，不拉此接口。
@@ -1046,8 +1097,29 @@ async function accept(id) { try { await api('/api/invitations/' + id + '/accept'
 async function reject(id) { try { await api('/api/invitations/' + id + '/reject', 'POST'); msg.value = '已拒绝递补'; if (detail.value) openDetail(detail.value.id || detail.value.activity_id); loadMy() } catch (e) { msg.value = e.message } }
 async function loadMy() { try { mine.value = await api('/api/my') } catch (e) { msg.value = e.message } }
 async function loadOrganized() { try { organized.value = await api('/api/my/organized') } catch (e) { msg.value = e.message } }
-async function loadNotif() { try { const j = await api('/api/notifications'); notifs.value = j.list; unread.value = j.unread } catch (e) { msg.value = e.message } }
-async function readAll() { await api('/api/notifications/read-all', 'POST'); loadNotif() }
+async function loadNotif(page = notifPage.value) {
+  try {
+    const data = await api('/api/notifications?page=' + page + '&size=' + notifPageSize)
+    notifs.value = data.list
+    unread.value = data.unread
+    notifTotal.value = data.total
+    notifPage.value = data.page
+  } catch (e) { msg.value = friendlyErr(e) }
+}
+async function readNotification(notification) {
+  try {
+    await api('/api/notifications/' + notification.id + '/read', 'POST')
+    await loadNotif()
+  } catch (e) { msg.value = friendlyErr(e) }
+}
+async function openNotification(notification) {
+  if (!notification.read_at) await readNotification(notification)
+  await openDetail(notification.activity_id)
+}
+async function readAll() {
+  try { await api('/api/notifications/read-all', 'POST'); await loadNotif() }
+  catch (e) { msg.value = friendlyErr(e) }
+}
 async function cancelActivity(id) {
   if (!confirm('确认取消该活动吗？')) return
   try {
@@ -1210,7 +1282,7 @@ watch(nowTick, () => {
 })
 onMounted(async () => {
   // 任务 8/18：每秒刷新时钟，驱动倒计时显示。
-  tickTimer = setInterval(() => { nowTick.value = Date.now() }, 1000)
+  tickTimer = setInterval(() => { nowTick.value = Date.now() + serverClockOffset }, 1000)
   // 任务 9：刷新后保持深色偏好（localStorage 'theme'）。
   applyTheme()
   // 任务 4：地址带 ?demo=1 时开启演示模式（页脚恢复入口出现），写入 localStorage。

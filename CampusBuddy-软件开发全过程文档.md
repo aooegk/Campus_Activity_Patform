@@ -98,7 +98,8 @@ GET /activities/{id}（返回活动版本，组织者额外取得名单与待确
 POST /activities、PUT /activities/{id}（携带 version 与修改原因）、POST /activities/{id}/cancel；
 POST /activities/{id}/signup、POST /participations/{id}/withdraw；
 POST /invitations/{id}/accept、/reject；
-GET /my、GET /notifications、POST /notifications/read-all、POST /demo/reset（仅演示）。
+GET /my、GET /my/participations/{id}/history；
+GET /notifications（支持分页）、POST /notifications/{id}/read、POST /notifications/read-all、POST /demo/reset（仅演示）。
 
 活动及参与的写请求可附加 `Idempotency-Key`。回执按账号和请求键保存，在业务事务内记录已提交响应。相同键对应不同请求时返回 HTTP 409。
 
@@ -148,7 +149,7 @@ C“周末学习组”上限 10（2 正式）。时间均为相对启动时刻 +
 
 ### 3.5 已知局限（不回避）
 - 浏览器使用持久化 Cookie 会话，写请求携带 CSRF 令牌。移动端兼容 Bearer 令牌。公网部署需使用 HTTPS，并配置 `SESSION_SECURE=true`。
-- 无分页：大厅与通知各取全量 / 前 50 条，演示规模够用。
+- 大厅仍返回全量结果。通知已提供每页最多 50 条的分页查询。
 - 无管理后台与评价接口（P2），表已预留，属后续工作。
 - 演示重置接口 `/demo/reset` 默认关闭。仅对独立演示库配置 `DEMO_ENABLED=true`，登录后可重置。
 
