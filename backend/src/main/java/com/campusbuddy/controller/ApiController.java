@@ -2,6 +2,7 @@ package com.campusbuddy.controller;
 
 import com.campusbuddy.model.ActivityFields;
 import com.campusbuddy.service.ActivityQueries;
+import com.campusbuddy.service.AttendanceService;
 import com.campusbuddy.service.AuthService;
 import com.campusbuddy.service.BuddyService;
 import com.campusbuddy.service.CommandReceipts;
@@ -35,11 +36,12 @@ public class ApiController {
     private final BuddyService buddy;
     private final CommandReceipts receipts;
     private final ActivityQueries activityQueries;
+    private final AttendanceService attendance;
     private final boolean demoEnabled;
     private final boolean secureSessionCookie;
 
     public ApiController(JdbcTemplate jdbc, AuthService auth, BuddyService buddy, CommandReceipts receipts,
-                         ActivityQueries activityQueries,
+                         ActivityQueries activityQueries, AttendanceService attendance,
                          @Value("${app.demo-enabled:false}") boolean demoEnabled,
                          @Value("${app.secure-session-cookie:false}") boolean secureSessionCookie) {
         this.jdbc = jdbc;
@@ -47,6 +49,7 @@ public class ApiController {
         this.buddy = buddy;
         this.receipts = receipts;
         this.activityQueries = activityQueries;
+        this.attendance = attendance;
         this.demoEnabled = demoEnabled;
         this.secureSessionCookie = secureSessionCookie;
     }
@@ -386,6 +389,45 @@ public class ApiController {
     }
 
     // ---- 我的活动 / 通知 ----
+    @GetMapping("/activities/{id}/attendance")
+    public Map<String, Object> attendance(@PathVariable long id,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        return attendance.view(id, require(actor));
+    }
+
+    @PostMapping("/activities/{id}/attendance/code")
+    public Map<String, Object> attendanceCode(@PathVariable long id,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        return attendance.code(id, require(actor));
+    }
+
+    @PostMapping("/activities/{id}/attendance/check-in")
+    public ResponseEntity<Map<String, Object>> checkIn(@PathVariable long id, @RequestBody Map<String, String> body,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        var result = attendance.checkIn(id, require(actor), body.get("code"));
+        if (Boolean.TRUE.equals(result.get("ok"))) return ResponseEntity.ok(result);
+        var status = "CHECKIN_RATE_LIMIT".equals(result.get("code"))
+                ? HttpStatus.TOO_MANY_REQUESTS : HttpStatus.BAD_REQUEST;
+        return ResponseEntity.status(status).body(result);
+    }
+
+    @PutMapping("/activities/{id}/attendance/{userId}")
+    public Map<String, Object> reviewAttendance(@PathVariable long id, @PathVariable long userId,
+            @RequestBody Map<String, Object> body,
+            @RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
+        long reviewer = require(actor);
+        long version;
+        try {
+            version = Long.parseLong(String.valueOf(body.get("version")));
+            if (version < 0) throw new NumberFormatException();
+        } catch (NumberFormatException e) {
+            throw new IllegalStateException("缺少有效出勤版本，请重新读取名单");
+        }
+        String status = body.get("status") instanceof String text ? text : "";
+        String reason = body.get("reason") instanceof String text ? text.strip() : "";
+        return attendance.review(id, reviewer, userId, version, status, reason);
+    }
+
     @GetMapping("/my")
     public List<Map<String, Object>> my(@RequestAttribute(value = SessionFilter.ACTOR, required = false) Long actor) {
         long me = require(actor);
@@ -484,6 +526,9 @@ public class ApiController {
         jdbc.update("DELETE FROM auth_session");
         jdbc.update("DELETE FROM login_attempt");
         jdbc.update("DELETE FROM operation_receipt");
+        jdbc.update("DELETE FROM attendance_review_event");
+        jdbc.update("DELETE FROM attendance_record");
+        jdbc.update("DELETE FROM attendance_activity");
         jdbc.update("DELETE FROM feedback");
         jdbc.update("DELETE FROM notification");
         jdbc.update("DELETE FROM invitation");

@@ -136,6 +136,9 @@
           <p class="hint">预留：已发出递补邀请、等对方确认的名额；对方确认后转为正式，过期则顺延给下一位候补。</p>
         </details>
         <p v-if="detail.status === 'CANCELLED'" class="info-line"><b>该活动已取消</b><span v-if="detail.cancel_reason">　{{ detail.cancel_reason }}</span></p>
+        <AttendancePanel v-if="user && detail.status !== 'CANCELLED' && (detail.is_organizer || detail.my_status === 'FORMAL')"
+                         :key="detail.id" :activity-id="detail.id" :organizer="detail.is_organizer"
+                         :clock="nowTick" :request="api" :format-time="fmtWeekSec" />
         <div v-if="user && detail.status !== 'CANCELLED' && !detail.is_organizer" class="message-box">
           <label class="field-label" for="message-draft">给组织者留言</label>
           <input id="message-draft" v-model="messageDraft" placeholder="如：请问场地有电梯吗？" maxlength="200" />
@@ -365,6 +368,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import PageNav from './PageNav.vue'
+import AttendancePanel from './AttendancePanel.vue'
 const view = ref('hall')
 // 详情页从哪来（大厅 / 我的活动），返回时回到原地（2026-11-10 详情独立页）。
 const detailFrom = ref('hall')

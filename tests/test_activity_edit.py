@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""在独立演示库上运行。设置 DEMO_ENABLED=true、INVITE_TTL=120 和全天递补。"""
+"""在独立演示库上运行。设置 DEMO_ENABLED=true、INVITE_TTL 至少 10 秒 和全天递补。"""
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 
@@ -51,8 +51,7 @@ def main():
     original_expiry = status["invitation_expires_at"]
     retry = {**updated, "version": 1}
     assert req("PUT", path, token=org, body={**retry, "capacity": 2})["ok"] is False
-    now = datetime.fromisoformat(req("GET", "/health")["server_time"])
-    early = (now + timedelta(seconds=30)).isoformat(timespec="seconds")
+    early = (datetime.fromisoformat(original_expiry) - timedelta(seconds=1)).isoformat(timespec="seconds")
     assert req("PUT", path, token=org, body={**retry, "deadline": early})["ok"] is False
     assert detail(c, aid)["invitation_expires_at"] == original_expiry
 

@@ -99,6 +99,7 @@ POST /activities、PUT /activities/{id}（版本和修改原因）、POST /activ
 POST /activities/{id}/signup（有参与条件时携带确认标志）、POST /participations/{id}/withdraw；
 POST /invitations/{id}/accept、/reject；
 GET /my、GET /my/participations/{id}/history；
+GET /activities/{id}/attendance、POST /activities/{id}/attendance/code、POST /activities/{id}/attendance/check-in、PUT /activities/{id}/attendance/{userId}；
 GET /notifications（支持分页）、POST /notifications/{id}/read、POST /notifications/read-all、POST /demo/reset（仅演示）。
 
 活动及参与的写请求可附加 `Idempotency-Key`。回执按账号和请求键保存，在业务事务内记录已提交响应。相同键对应不同请求时返回 HTTP 409。

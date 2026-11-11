@@ -119,14 +119,14 @@ public class BuddyService {
      *  同时统一 toString() 的输出格式（ISO），两库返回的 JSON 时间格式一致。
      *  只做类型归一化，不做时区转换：Timestamp 按 JVM 默认时区（东八区）解读，
      *  得到的即库里存的东八区墙钟原值。 */
-    private static LocalDateTime asLocalDateTime(Object v) {
+    static LocalDateTime asLocalDateTime(Object v) {
         if (v instanceof LocalDateTime ldt) return ldt;
         if (v instanceof Timestamp t) return t.toLocalDateTime();
         if (v instanceof java.util.Date d) return new Timestamp(d.getTime()).toLocalDateTime();
         throw new IllegalStateException("无法识别的时间类型: " + v);
     }
 
-    private void notify(Long userId, Long activityId, Long invitationId,
+    void notify(Long userId, Long activityId, Long invitationId,
                         String type, String content, String eventKey) {
         notifyWithSender(userId, activityId, invitationId, type, content, eventKey, null);
     }
@@ -184,7 +184,7 @@ public class BuddyService {
                 Integer.class, activityId);
     }
 
-    private Map<String, Object> lockActivity(long activityId) {
+    Map<String, Object> lockActivity(long activityId) {
         return jdbc.queryForMap("SELECT * FROM activity WHERE id=? FOR UPDATE", activityId);
     }
 

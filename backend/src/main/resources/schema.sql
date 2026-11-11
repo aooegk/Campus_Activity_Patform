@@ -123,3 +123,39 @@ CREATE TABLE IF NOT EXISTS participation_event (
     FOREIGN KEY (participation_id) REFERENCES participation(id)
 );
 CREATE INDEX IF NOT EXISTS idx_participation_event ON participation_event(participation_id, occurred_at, id);
+
+CREATE TABLE IF NOT EXISTS attendance_activity (
+    activity_id BIGINT PRIMARY KEY,
+    code_seed   CHAR(64),
+    snapshot_at TIMESTAMP,
+    FOREIGN KEY (activity_id) REFERENCES activity(id)
+);
+
+CREATE TABLE IF NOT EXISTS attendance_record (
+    activity_id  BIGINT NOT NULL,
+    user_id      BIGINT NOT NULL,
+    eligible     BOOLEAN NOT NULL DEFAULT FALSE,
+    checked_in_at TIMESTAMP,
+    failed_count INTEGER NOT NULL DEFAULT 0,
+    failed_until TIMESTAMP,
+    review_status VARCHAR(12),
+    review_reason VARCHAR(500),
+    version      BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (activity_id, user_id),
+    FOREIGN KEY (activity_id) REFERENCES activity(id),
+    FOREIGN KEY (user_id) REFERENCES app_user(id),
+    CHECK (review_status IN ('PRESENT','ABSENT','EXCUSED','UNVERIFIED'))
+);
+
+CREATE TABLE IF NOT EXISTS attendance_review_event (
+    activity_id BIGINT NOT NULL,
+    user_id     BIGINT NOT NULL,
+    version     BIGINT NOT NULL,
+    reviewer_id BIGINT NOT NULL,
+    status      VARCHAR(12) NOT NULL CHECK (status IN ('PRESENT','ABSENT','EXCUSED','UNVERIFIED')),
+    reason      VARCHAR(500) NOT NULL,
+    decided_at  TIMESTAMP NOT NULL,
+    PRIMARY KEY (activity_id, user_id, version),
+    FOREIGN KEY (activity_id, user_id) REFERENCES attendance_record(activity_id, user_id),
+    FOREIGN KEY (reviewer_id) REFERENCES app_user(id)
+);

@@ -17,10 +17,12 @@ public class SweepService {
 
     private final JdbcTemplate jdbc;
     private final BuddyService buddy;
+    private final AttendanceService attendance;
 
-    public SweepService(JdbcTemplate jdbc, BuddyService buddy) {
+    public SweepService(JdbcTemplate jdbc, BuddyService buddy, AttendanceService attendance) {
         this.jdbc = jdbc;
         this.buddy = buddy;
+        this.attendance = attendance;
     }
 
     @Scheduled(fixedDelayString = "${app.sweep-seconds:10}000")
@@ -54,6 +56,17 @@ public class SweepService {
                 buddy.refreshInvitations(id);
             } catch (Exception e) {
                 log.warn("活动 {} 的递补扫描失败，将在下一轮重试", id, e);
+            }
+        }
+        List<Long> dueSnapshots = jdbc.queryForList(
+                "SELECT a.id FROM activity a LEFT JOIN attendance_activity r ON r.activity_id=a.id " +
+                "WHERE a.status<>'CANCELLED' AND a.start_time<=? AND r.snapshot_at IS NULL " +
+                "ORDER BY a.start_time DESC, a.id DESC LIMIT 50", Long.class, cutoff);
+        for (long id : dueSnapshots) {
+            try {
+                attendance.capture(id);
+            } catch (Exception e) {
+                log.warn("活动 {} 的出勤快照生成失败，将在下一轮重试", id, e);
             }
         }
     }
